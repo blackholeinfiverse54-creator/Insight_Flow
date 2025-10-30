@@ -1,0 +1,348 @@
+from fastapi import APIRouter, HTTPException, Depends, status
+from typing import Dict, List
+from datetime import datetime
+from app.schemas.routing import RouteRequest, RouteResponse, FeedbackRequest
+from app.services.decision_engine import decision_engine
+from app.core.security import get_current_user
+from app.core.dependencies import get_feedback_service
+from app.ml.weighted_scoring import get_scoring_engine
+from app.adapters.ksml_adapter import KSMLAdapter, KSMLPacketType
+from app.utils.routing_decision_logger import get_routing_logger
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/routing", tags=["routing"])
+
+
+@router.post("/route", response_model=RouteResponse, status_code=status.HTTP_200_OK)
+async def route_request(
+    request: RouteRequest,
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Route a request to the most suitable agent
+    
+    Args:
+        request: Routing request data
+        current_user: Current authenticated user
+        
+    Returns:
+        Routing decision with agent information
+    """
+    try:
+        # Add user context
+        context = request.context or {}
+        context["user_id"] = current_user.get("user_id")
+        
+        # Route the request
+        routing_decision = await decision_engine.route_request(
+            input_data=request.input_data,
+            input_type=request.input_type,
+            context=context,
+            strategy=request.strategy
+        )
+        
+        return RouteResponse(**routing_decision)
+        
+    except ValueError as e:
+        logger.error("Routing validation error", extra={
+            'error': str(e),
+            'input_type': request.input_type,
+            'strategy': request.strategy,
+            'user_id': current_user.get("user_id")
+        })
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Routing error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal routing error"
+        )
+
+
+@router.post("/feedback", status_code=status.HTTP_200_OK)
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Submit feedback for a routing decision
+    
+    Args:
+        feedback: Feedback data
+        current_user: Current authenticated user
+        
+    Returns:
+        Success message
+    """
+    try:
+        await decision_engine.process_feedback(
+            routing_log_id=feedback.routing_log_id,
+            feedback_data=feedback.model_dump(exclude={"routing_log_id"})
+        )
+        
+        return {
+            "message": "Feedback processed successfully",
+            "routing_log_id": feedback.routing_log_id
+        }
+        
+    except ValueError as e:
+        logger.error(f"Feedback validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Feedback processing error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal feedback processing error"
+        )
+
+
+@router.post("/route-agent")
+async def route_agent(
+    request: dict,
+    feedback_service = Depends(get_feedback_service)
+):
+    # Start timing
+    start_time = time.time()
+    """
+    Route incoming task to best agent using weighted scoring.
+    
+    Accepts both v1 (InsightFlow) and v2 (Core) formats.
+    Returns v2 format with confidence breakdown.
+    
+    Request body:
+    {
+        "agent_type": "nlp",  # or "task_type" for v2
+        "context": {},
+        "confidence_threshold": 0.75
+    }
+    
+    Response:
+    {
+        "agent_id": "nlp-001",
+        "confidence_score": 0.87,
+        "score_breakdown": {
+            "rule_based_score": 0.80,
+            "feedback_based_score": 0.90,
+            "availability_score": 0.85,
+            ...
+        },
+        "routing_reasoning": "Selected based on weighted scores"
+    }
+    """
+    
+    try:
+        # Extract agent type (support both v1 and v2 formats)
+        agent_type = request.get("agent_type") or request.get("task_type")
+        if not agent_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing 'agent_type' or 'task_type'"
+            )
+        
+        confidence_threshold = request.get("confidence_threshold", 0.5)
+        context = request.get("context", {})
+        request_id = request.get("request_id") or request.get("correlation_id")
+        
+        # Step 1: Get candidate agents for this type
+        candidates = await _get_candidate_agents(agent_type)
+        
+        if not candidates:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No agents available for type: {agent_type}"
+            )
+        
+        # Step 2: Calculate scores for each candidate
+        scoring_engine = get_scoring_engine()
+        best_agent = None
+        best_confidence = 0.0
+        all_scores = {}
+        
+        for agent in candidates:
+            agent_id = agent["id"]
+            
+            # Get rule-based score (from existing logic)
+            rule_score = _calculate_rule_based_score(agent, context)
+            
+            # Get feedback-based score from Core
+            feedback_score = await feedback_service.get_agent_score(agent_id)
+            
+            # Get availability score
+            availability_score = await _get_availability_score(agent_id)
+            
+            # Calculate final confidence using weighted scoring
+            confidence = scoring_engine.calculate_confidence(
+                agent_id=agent_id,
+                rule_based_score=rule_score,
+                feedback_score=feedback_score,
+                availability_score=availability_score
+            )
+            
+            all_scores[agent_id] = {
+                "confidence": confidence.final_score,
+                "breakdown": confidence.get_breakdown(),
+                "rule_score": rule_score,
+                "feedback_score": feedback_score,
+                "availability_score": availability_score,
+            }
+            
+            # Track best agent
+            if confidence.final_score > best_confidence:
+                best_confidence = confidence.final_score
+                best_agent = agent_id
+        
+        if not best_agent or best_confidence < confidence_threshold:
+            raise HTTPException(
+                status_code=503,
+                detail="No suitable agent found meeting confidence threshold"
+            )
+        
+        # Step 3: Prepare response
+        best_scores = all_scores[best_agent]
+        response = {
+            "agent_id": best_agent,
+            "confidence_score": best_confidence,
+            "score_breakdown": {
+                "rule_based_score": best_scores["rule_score"],
+                "feedback_based_score": best_scores["feedback_score"],
+                "availability_score": best_scores["availability_score"],
+                "rule_weight": 0.4,
+                "feedback_weight": 0.4,
+                "availability_weight": 0.2,
+            },
+            "alternative_agents": [
+                {
+                    "agent_id": aid,
+                    "confidence_score": scores["confidence"]
+                }
+                for aid, scores in sorted(
+                    all_scores.items(),
+                    key=lambda x: x[1]["confidence"],
+                    reverse=True
+                )[1:3]  # Top 2 alternatives
+            ],
+            "routing_reasoning": (
+                f"Selected {best_agent} based on weighted scoring: "
+                f"rule={best_scores['rule_score']:.2f}, "
+                f"feedback={best_scores['feedback_score']:.2f}, "
+                f"availability={best_scores['availability_score']:.2f}"
+            ),
+            "request_id": request_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+        
+        # Calculate response time
+        response_time_ms = (time.time() - start_time) * 1000
+        
+        # Log routing decision with detailed breakdown
+        routing_logger = get_routing_logger()
+        routing_logger.log_decision(
+            agent_selected=best_agent,
+            confidence_score=best_confidence,
+            request_id=request_id,
+            context=context,
+            score_breakdown=best_scores["breakdown"],
+            alternatives=[alt["agent_id"] for alt in response["alternative_agents"]],
+            response_time_ms=response_time_ms,
+            reasoning=response["routing_reasoning"]
+        )
+        
+        # Also log to standard logger
+        _log_routing_decision(
+            agent_id=best_agent,
+            confidence=best_confidence,
+            request_id=request_id,
+            context=context
+        )
+        
+        return response
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in route_agent: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def _get_candidate_agents(agent_type: str) -> List[Dict]:
+    """Get list of agents for given type"""
+    from app.services.agent_service import agent_service
+    
+    try:
+        # Get all active agents
+        all_agents = await agent_service.get_active_agents()
+        
+        # Filter by type
+        candidates = [
+            agent for agent in all_agents 
+            if agent.get("type") == agent_type
+        ]
+        
+        return candidates
+    except Exception as e:
+        logger.error(f"Error getting candidate agents: {e}")
+        return []
+
+
+def _calculate_rule_based_score(agent: Dict, context: Dict) -> float:
+    """Calculate score using traditional rules"""
+    base_score = 0.8
+    
+    # Adjust based on context
+    if context.get("priority") == "high":
+        base_score += 0.1
+    
+    # Performance bonus
+    performance_score = agent.get("performance_score", 0.5)
+    base_score = (base_score + performance_score) / 2
+    
+    # Success rate bonus
+    success_rate = agent.get("success_rate", 0.5)
+    base_score = (base_score + success_rate) / 2
+    
+    return min(1.0, base_score)
+
+
+async def _get_availability_score(agent_id: str) -> float:
+    """Get agent availability score"""
+    from app.services.agent_service import agent_service
+    
+    try:
+        agent = await agent_service.get_agent_by_id(agent_id)
+        if not agent:
+            return 0.3
+        
+        # Base availability on status
+        status = agent.get("status", "inactive")
+        if status == "active":
+            return 1.0
+        elif status == "maintenance":
+            return 0.5
+        else:
+            return 0.3
+    except Exception as e:
+        logger.warning(f"Error getting availability for {agent_id}: {e}")
+        return 0.5
+
+
+def _log_routing_decision(
+    agent_id: str,
+    confidence: float,
+    request_id: str,
+    context: Dict
+):
+    """Log routing decision for audit trail"""
+    logger.info(
+        f"Routing decision: agent={agent_id}, "
+        f"confidence={confidence:.2f}, "
+        f"request_id={request_id}"
+    )
