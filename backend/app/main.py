@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Dict
 
 from app.core.config import settings
 from app.core.database import init_database
@@ -32,6 +33,16 @@ async def lifespan(app: FastAPI):
     
     # Initialize database
     await init_database()
+    
+    # Initialize STP service
+    from app.services.stp_service import get_stp_service
+    stp_service = get_stp_service()
+    logger.info(f"STP service initialized (enabled={settings.STP_ENABLED})")
+    
+    # Initialize Karma service
+    from app.services.karma_service import get_karma_service
+    karma_service = get_karma_service()
+    logger.info(f"Karma service initialized (enabled={settings.KARMA_ENABLED})")
     
     logger.info("Application startup complete")
     
@@ -89,12 +100,13 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     from app.core.dependencies import get_feedback_service
+    from app.services.stp_service import get_stp_service
     
     # Check feedback service health
     feedback_service = get_feedback_service()
     feedback_healthy = await feedback_service.health_check()
     
-    return {
+    health_data = {
         "status": "healthy" if feedback_healthy else "degraded",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
@@ -103,6 +115,15 @@ async def health_check():
             "feedback_service": "healthy" if feedback_healthy else "unhealthy"
         }
     }
+    
+    # Wrap in STP format if enabled
+    try:
+        stp_service = get_stp_service()
+        wrapped_health = await stp_service.wrap_health_check(health_data)
+        return wrapped_health
+    except Exception as e:
+        logger.warning(f"STP health check wrapping failed: {e}")
+        return health_data
 
 
 @app.get("/health/ksml")
@@ -268,6 +289,103 @@ async def get_routing_statistics(
     
     return {
         "statistics": stats,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.get("/api/stp/metrics")
+async def get_stp_metrics():
+    """Get STP middleware metrics"""
+    from app.services.stp_service import get_stp_service
+    
+    stp_service = get_stp_service()
+    metrics = stp_service.get_stp_metrics()
+    
+    return {
+        "stp_metrics": metrics,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.post("/api/stp/unwrap")
+async def unwrap_stp_packet(
+    stp_packet: Dict
+):
+    """Unwrap STP packet for debugging/testing"""
+    from app.services.stp_service import get_stp_service
+    
+    stp_service = get_stp_service()
+    
+    try:
+        payload, metadata = await stp_service.unwrap_packet(stp_packet)
+        
+        return {
+            "success": True,
+            "payload": payload,
+            "metadata": metadata,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+
+@app.get("/api/karma/metrics")
+async def get_karma_metrics():
+    """Get Karma service metrics"""
+    from app.services.karma_service import get_karma_service
+    
+    karma_service = get_karma_service()
+    metrics = karma_service.get_metrics()
+    
+    return {
+        "karma_metrics": metrics,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.get("/api/karma/score/{agent_id}")
+async def get_agent_karma_score(agent_id: str):
+    """Get Karma score for specific agent"""
+    from app.services.karma_service import get_karma_service
+    
+    karma_service = get_karma_service()
+    
+    try:
+        score = await karma_service.get_karma_score(agent_id)
+        details = await karma_service.get_karma_details(agent_id)
+        
+        return {
+            "agent_id": agent_id,
+            "karma_score": score,
+            "details": details.dict() if details else None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "agent_id": agent_id,
+            "karma_score": 0.0,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+
+@app.post("/api/karma/toggle")
+async def toggle_karma_weighting(
+    enabled: bool
+):
+    """Toggle Karma weighting ON/OFF"""
+    from app.services.karma_service import get_karma_service
+    
+    karma_service = get_karma_service()
+    karma_service.toggle_karma_weighting(enabled)
+    
+    return {
+        "karma_enabled": enabled,
+        "message": f"Karma weighting {'enabled' if enabled else 'disabled'}",
         "timestamp": datetime.utcnow().isoformat()
     }
 

@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 import yaml
 import os
+from app.services.karma_service import KarmaServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ConfidenceScore:
 
 class WeightedScoringEngine:
     """
-    Engine for combining multiple scoring sources.
+    Engine for combining multiple scoring sources including Karma.
     
     Configuration (from scoring_config.yaml):
     ```yaml
@@ -63,18 +64,25 @@ class WeightedScoringEngine:
       rule_based: 0.4
       feedback_based: 0.4
       availability: 0.2
+    karma_weight: 0.15
     ```
     """
     
-    def __init__(self, config_path: str = "app/config/scoring_config.yaml"):
+    def __init__(
+        self, 
+        config_path: str = "app/config/scoring_config.yaml",
+        karma_service: Optional[KarmaServiceClient] = None
+    ):
         """
-        Initialize scoring engine.
+        Initialize scoring engine with optional Karma service.
         
         Args:
             config_path: Path to scoring configuration YAML
+            karma_service: Optional Karma service client
         """
         self.config = self._load_config(config_path)
         self.weights = self.config.get("scoring_weights", {})
+        self.karma_service = karma_service
         
         # Validate weights sum to 1.0
         total_weight = sum(self.weights.values())
@@ -157,6 +165,93 @@ class WeightedScoringEngine:
             normalization_method="min_max"
         )
     
+    async def calculate_confidence_with_karma(
+        self,
+        agent_id: str,
+        rule_based_score: float,
+        feedback_score: float,
+        availability_score: float
+    ) -> ConfidenceScore:
+        """
+        Calculate final confidence score with Karma weighting.
+        
+        Args:
+            agent_id: Agent identifier
+            rule_based_score: Score from traditional rules (0-1)
+            feedback_score: Score from Core feedback service (0-1)
+            availability_score: Agent availability score (0-1)
+        
+        Returns:
+            ConfidenceScore object with Karma adjustment
+        """
+        # Get base confidence (without Karma)
+        base_confidence = self.calculate_confidence(
+            agent_id=agent_id,
+            rule_based_score=rule_based_score,
+            feedback_score=feedback_score,
+            availability_score=availability_score
+        )
+        
+        # Check if Karma is enabled in configuration
+        karma_config = self.config.get("karma_weighting", {})
+        karma_enabled = karma_config.get("enabled", True)
+        
+        # If no Karma service or disabled, return base confidence
+        if (self.karma_service is None or 
+            not self.karma_service.enabled or 
+            not karma_enabled):
+            return base_confidence
+        
+        # Fetch Karma score
+        try:
+            karma_score = await self.karma_service.get_karma_score(agent_id)
+            
+            # Apply Karma modifier
+            # Karma ranges from -1.0 to 1.0
+            # Negative Karma decreases confidence, positive increases it
+            karma_config = self.config.get("karma_weighting", {})
+            karma_weight = karma_config.get("weight", self.config.get("karma_weight", 0.15))  # 15% influence
+            
+            # Calculate Karma adjustment
+            karma_adjustment = karma_score * karma_weight
+            
+            # Apply adjustment to final score
+            adjusted_score = base_confidence.final_score + karma_adjustment
+            
+            # Clamp to valid range [0, 1]
+            adjusted_score = max(0.0, min(1.0, adjusted_score))
+            
+            # Add Karma component to breakdown
+            karma_component = ScoreComponent(
+                name="karma_weighted",
+                score=karma_score,
+                weight=karma_weight
+            )
+            
+            # Create new confidence with Karma
+            components = base_confidence.components.copy()
+            components["karma_weighted"] = karma_component
+            
+            adjusted_confidence = ConfidenceScore(
+                final_score=adjusted_score,
+                components=components,
+                normalization_method="karma_adjusted"
+            )
+            
+            logger.debug(
+                f"Karma adjustment for {agent_id}: "
+                f"karma={karma_score:.2f}, "
+                f"base={base_confidence.final_score:.2f}, "
+                f"adjusted={adjusted_score:.2f}"
+            )
+            
+            return adjusted_confidence
+        
+        except Exception as e:
+            logger.error(f"Error applying Karma weighting: {str(e)}")
+            # Fallback to base confidence
+            return base_confidence
+    
     def _normalize_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
         """Normalize weights to sum to 1.0"""
         total = sum(weights.values())
@@ -216,6 +311,7 @@ class WeightedScoringEngine:
                 "feedback_based": 0.4,
                 "availability": 0.2,
             },
+            "karma_weight": 0.15,
             "score_sources": {
                 "rule_based": {
                     "enabled": True,
@@ -239,6 +335,13 @@ class WeightedScoringEngine:
             "logging": {
                 "level": "DEBUG",
                 "score_breakdown": True
+            },
+            "karma_weighting": {
+                "enabled": True,
+                "weight": 0.15,
+                "cache_ttl": 60,
+                "timeout": 5,
+                "max_retries": 3
             }
         }
 
@@ -247,9 +350,17 @@ class WeightedScoringEngine:
 _scoring_engine: Optional[WeightedScoringEngine] = None
 
 
-def get_scoring_engine() -> WeightedScoringEngine:
-    """Get or create scoring engine instance"""
+def get_scoring_engine(karma_service: Optional[KarmaServiceClient] = None) -> WeightedScoringEngine:
+    """Get or create scoring engine instance with optional Karma service"""
     global _scoring_engine
     if _scoring_engine is None:
-        _scoring_engine = WeightedScoringEngine()
+        # Import here to avoid circular imports
+        if karma_service is None:
+            try:
+                from app.services.karma_service import get_karma_service
+                karma_service = get_karma_service()
+            except ImportError:
+                karma_service = None
+        
+        _scoring_engine = WeightedScoringEngine(karma_service=karma_service)
     return _scoring_engine

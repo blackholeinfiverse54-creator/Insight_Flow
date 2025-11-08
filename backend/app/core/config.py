@@ -1,15 +1,66 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 import os
 
 
 class Settings(BaseSettings):
-    """Application configuration settings"""
+    """Application settings with Sovereign Core integration"""
     
-    # Supabase Configuration
-    SUPABASE_URL: str
-    SUPABASE_ANON_KEY: str
-    SUPABASE_SERVICE_KEY: str
+    # ========================================================================
+    # Sovereign Core Configuration (Phase 2.2)
+    # ========================================================================
+    
+    # Sovereign Core Auth
+    SOVEREIGN_AUTH_URL: str = os.getenv(
+        "SOVEREIGN_AUTH_URL",
+        "http://localhost:8003/auth"
+    )
+    SOVEREIGN_SERVICE_KEY: str = os.getenv(
+        "SOVEREIGN_SERVICE_KEY",
+        "sovereign-service-key-placeholder"
+    )
+    SOVEREIGN_JWT_SECRET: str = os.getenv(
+        "SOVEREIGN_JWT_SECRET",
+        "sovereign-jwt-secret-placeholder"
+    )
+    SOVEREIGN_JWT_ALGORITHM: str = os.getenv(
+        "SOVEREIGN_JWT_ALGORITHM",
+        "HS256"
+    )
+    
+    # Sovereign Core Database
+    SOVEREIGN_DB_HOST: str = os.getenv(
+        "SOVEREIGN_DB_HOST",
+        "localhost"
+    )
+    SOVEREIGN_DB_PORT: int = int(os.getenv(
+        "SOVEREIGN_DB_PORT",
+        "5432"
+    ))
+    SOVEREIGN_DB_NAME: str = os.getenv(
+        "SOVEREIGN_DB_NAME",
+        "sovereign_core"
+    )
+    SOVEREIGN_DB_USER: str = os.getenv(
+        "SOVEREIGN_DB_USER",
+        "sovereign_user"
+    )
+    SOVEREIGN_DB_PASSWORD: str = os.getenv(
+        "SOVEREIGN_DB_PASSWORD",
+        "sovereign_password"
+    )
+    
+    # Migration toggle
+    USE_SOVEREIGN_CORE: bool = os.getenv(
+        "USE_SOVEREIGN_CORE",
+        "false"
+    ).lower() == "true"
+    
+    # Backward compatibility (Supabase)
+    # These are kept for transition period
+    SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
+    SUPABASE_ANON_KEY: Optional[str] = os.getenv("SUPABASE_ANON_KEY")
+    SUPABASE_SERVICE_KEY: Optional[str] = os.getenv("SUPABASE_SERVICE_KEY")
     
     # JWT Configuration
     JWT_SECRET_KEY: str
@@ -59,6 +110,44 @@ class Settings(BaseSettings):
         "ROUTING_LOG_RETENTION_DAYS",
         "30"
     ))
+    
+    # ========================================================================
+    # STP-Layer Configuration (Phase 2.2)
+    # ========================================================================
+    
+    # Enable/disable STP wrapping (for gradual rollout)
+    STP_ENABLED: bool = os.getenv("STP_ENABLED", "true").lower() == "true"
+    
+    # STP destination system
+    STP_DESTINATION: str = os.getenv("STP_DESTINATION", "sovereign_core")
+    
+    # Default STP priority
+    STP_DEFAULT_PRIORITY: str = os.getenv("STP_DEFAULT_PRIORITY", "normal")
+    
+    # Require acknowledgment for critical packets
+    STP_REQUIRE_ACK: bool = os.getenv("STP_REQUIRE_ACK", "false").lower() == "true"
+    
+    # ========================================================================
+    # Karma Weighting Configuration (Phase 2.2)
+    # ========================================================================
+    
+    # Karma Tracker endpoint URL
+    KARMA_ENDPOINT: str = os.getenv(
+        "KARMA_ENDPOINT",
+        "http://localhost:8002/api/karma"
+    )
+    
+    # Enable/disable Karma weighting
+    KARMA_ENABLED: bool = os.getenv("KARMA_ENABLED", "true").lower() == "true"
+    
+    # Karma cache TTL (seconds)
+    KARMA_CACHE_TTL: int = int(os.getenv("KARMA_CACHE_TTL", "60"))
+    
+    # Karma request timeout (seconds)
+    KARMA_TIMEOUT: int = int(os.getenv("KARMA_TIMEOUT", "5"))
+    
+    # Karma weight in scoring (0-1)
+    KARMA_WEIGHT: float = float(os.getenv("KARMA_WEIGHT", "0.15"))
     
     model_config = SettingsConfigDict(
         env_file=".env",

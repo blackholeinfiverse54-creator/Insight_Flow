@@ -7,6 +7,7 @@ from typing import Dict, List
 from app.services.interface_service import interface_service
 from app.services.ksml_service import ksml_service
 from app.services.validation_service import validation_service
+from app.services.stp_service import get_stp_service
 from app.core.security import get_current_user
 from app.api.middleware.version_detector import detect_api_version, add_version_headers
 from pydantic import BaseModel
@@ -109,6 +110,21 @@ async def route_request_v2(
                 "strategy_used": request.strategy
             }
         }
+        
+        # Check if client requests STP format via header
+        stp_requested = http_request.headers.get("X-STP-Format", "false").lower() == "true"
+        
+        if stp_requested:
+            try:
+                stp_service = get_stp_service()
+                wrapped_response = await stp_service.wrap_routing_decision(
+                    routing_decision=enhanced_response,
+                    requires_ack=request.preferences.get("requires_ack", False)
+                )
+                logger.info(f"V2 STP routing completed for user {current_user.get('user_id')}")
+                return wrapped_response
+            except Exception as e:
+                logger.warning(f"STP wrapping failed in v2 endpoint: {e}")
         
         logger.info(f"V2 enhanced routing completed for user {current_user.get('user_id')}")
         return enhanced_response

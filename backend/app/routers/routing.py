@@ -8,10 +8,24 @@ from app.core.dependencies import get_feedback_service
 from app.ml.weighted_scoring import get_scoring_engine
 from app.adapters.ksml_adapter import KSMLAdapter, KSMLPacketType
 from app.utils.routing_decision_logger import get_routing_logger
+from app.middleware.stp_middleware import get_stp_middleware, STPPacketType
+from app.services.karma_service import KarmaServiceClient
+from app.core.config import settings
 import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+# Initialize Karma service
+karma_service = KarmaServiceClient(
+    karma_endpoint=settings.KARMA_ENDPOINT,
+    cache_ttl=settings.KARMA_CACHE_TTL,
+    timeout=settings.KARMA_TIMEOUT,
+    enabled=settings.KARMA_ENABLED
+)
+
+# Initialize WeightedScoringEngine with Karma service
+scoring_engine = get_scoring_engine(karma_service=karma_service)
 
 router = APIRouter(prefix="/api/v1/routing", tags=["routing"])
 
@@ -162,7 +176,6 @@ async def route_agent(
             )
         
         # Step 2: Calculate scores for each candidate
-        scoring_engine = get_scoring_engine()
         best_agent = None
         best_confidence = 0.0
         all_scores = {}
@@ -179,8 +192,8 @@ async def route_agent(
             # Get availability score
             availability_score = await _get_availability_score(agent_id)
             
-            # Calculate final confidence using weighted scoring
-            confidence = scoring_engine.calculate_confidence(
+            # Calculate final confidence using Karma-weighted scoring
+            confidence = await scoring_engine.calculate_confidence_with_karma(
                 agent_id=agent_id,
                 rule_based_score=rule_score,
                 feedback_score=feedback_score,
@@ -264,7 +277,29 @@ async def route_agent(
             context=context
         )
         
-        return response
+        # Wrap response in STP format
+        stp_middleware = get_stp_middleware(enable_stp=settings.STP_ENABLED)
+        
+        try:
+            stp_wrapped_response = stp_middleware.wrap(
+                payload=response,
+                packet_type=STPPacketType.ROUTING_DECISION.value,
+                destination=settings.STP_DESTINATION,
+                priority=settings.STP_DEFAULT_PRIORITY,
+                requires_ack=settings.STP_REQUIRE_ACK
+            )
+            
+            logger.info(
+                f"Routing response wrapped in STP: "
+                f"token={stp_wrapped_response.get('stp_token')}"
+            )
+            
+            return stp_wrapped_response
+        
+        except Exception as e:
+            logger.error(f"Error wrapping response in STP: {str(e)}")
+            # Fallback: return unwrapped response
+            return response
     
     except HTTPException:
         raise

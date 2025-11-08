@@ -4,6 +4,7 @@ from app.services.q_learning import q_learning_router
 from app.core.dependencies import get_feedback_service
 from app.ml.weighted_scoring import get_scoring_engine
 from app.core.database import get_db
+from app.services.stp_service import get_stp_service
 import logging
 from datetime import datetime
 import uuid
@@ -18,6 +19,7 @@ class DecisionEngine:
         self.agent_service = AgentService()
         self.feedback_score_service = get_feedback_service()
         self.scoring_engine = get_scoring_engine()
+        self.stp_service = get_stp_service()
     
     async def route_request(
         self,
@@ -127,7 +129,8 @@ class DecisionEngine:
             reasoning=reason
         )
         
-        return {
+        # Create routing decision response
+        routing_decision = {
             "request_id": request_id,
             "routing_log_id": routing_log["id"],
             "agent_id": agent_id,
@@ -137,6 +140,17 @@ class DecisionEngine:
             "routing_reason": reason,
             "routing_strategy": strategy
         }
+        
+        # Wrap in STP format if enabled (maintains backward compatibility)
+        try:
+            wrapped_decision = await self.stp_service.wrap_routing_decision(
+                routing_decision=routing_decision,
+                requires_ack=context.get("requires_ack", False)
+            )
+            return wrapped_decision
+        except Exception as e:
+            logger.warning(f"STP wrapping failed, returning unwrapped: {e}")
+            return routing_decision
     
     async def _route_rule_based(
         self,
@@ -318,6 +332,17 @@ class DecisionEngine:
             }
             
             db.table("feedback_events").insert(feedback_record).execute()
+            
+            # Wrap feedback in STP format for external systems
+            try:
+                wrapped_feedback = await self.stp_service.wrap_feedback_packet(
+                    feedback_data=feedback_record,
+                    requires_ack=True
+                )
+                logger.debug(f"Feedback wrapped in STP format: {wrapped_feedback.get('stp_token')}")
+            except Exception as stp_error:
+                logger.warning(f"STP feedback wrapping failed: {stp_error}")
+                
         except Exception as e:
             logger.error(f"Database operation failed: {e}")
             raise

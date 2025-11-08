@@ -11,6 +11,7 @@ from datetime import datetime
 
 from app.utils.routing_decision_logger import get_routing_logger
 from app.core.security import get_current_user
+from app.services.karma_service import KarmaServiceClient
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -169,4 +170,97 @@ async def get_system_health(
         raise HTTPException(
             status_code=500,
             detail=f"Error checking system health: {str(e)}"
+        )
+
+
+@router.post("/karma/toggle")
+async def toggle_karma_weighting(
+    enabled: bool = Query(..., description="Enable or disable Karma weighting")
+):
+    """
+    Toggle Karma weighting ON/OFF.
+    
+    This allows for A/B testing and experiments.
+    
+    Args:
+        enabled: True to enable, False to disable
+    
+    Returns:
+        Status of Karma weighting
+    """
+    try:
+        # Get global Karma service instance
+        from app.routers.routing import karma_service
+        
+        karma_service.toggle_karma_weighting(enabled)
+        
+        return {
+            "success": True,
+            "karma_enabled": enabled,
+            "message": f"Karma weighting {'enabled' if enabled else 'disabled'}"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error toggling Karma: {str(e)}"
+        )
+
+
+@router.get("/karma/metrics")
+async def get_karma_metrics():
+    """
+    Get Karma service metrics.
+    
+    Returns:
+    - requests: Total Karma requests made
+    - cache_hits: Cache hit count
+    - cache_misses: Cache miss count
+    - errors: Error count
+    - enabled: Whether Karma is enabled
+    """
+    try:
+        from app.routers.routing import karma_service
+        
+        metrics = karma_service.get_metrics()
+        
+        return {
+            "success": True,
+            "metrics": metrics
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving metrics: {str(e)}"
+        )
+
+
+@router.delete("/karma/cache")
+async def clear_karma_cache(
+    agent_id: Optional[str] = Query(None, description="Agent ID to clear, or all if None")
+):
+    """
+    Clear Karma cache for specific agent or all agents.
+    
+    Args:
+        agent_id: Agent ID to clear cache for, or None to clear all
+    
+    Returns:
+        Confirmation message
+    """
+    try:
+        from app.routers.routing import karma_service
+        
+        karma_service.clear_cache(agent_id)
+        
+        return {
+            "success": True,
+            "message": f"Karma cache cleared for {'all agents' if agent_id is None else agent_id}"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error clearing cache: {str(e)}"
         )
