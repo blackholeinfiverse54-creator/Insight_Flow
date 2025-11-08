@@ -1,27 +1,51 @@
 # InsightFlow - Adaptive Decision Intelligence Engine
 
-InsightFlow is a cross-platform, self-learning intelligence layer that routes tasks and responses to the most suitable AI agent, continuously improving through analytics, feedback, and context signals.
+InsightFlow is a cross-platform, self-learning intelligence layer that routes tasks and responses to the most suitable AI agent, continuously improving through analytics, feedback, and context signals. Now enhanced with **Sovereign Core Integration** for enterprise-grade security and behavioral intelligence.
 
-## 🚀 Features
+## 🚀 Core Features
 
-- **Intelligent Agent Routing**: Q-learning based adaptive routing with multiple strategies
-- **API Versioning**: Dual v1/v2 support with seamless migration path
-- **Enhanced Responses**: Alternative agents, metadata, and structured error handling (v2)
+### 🧠 **Intelligent Routing System**
+- **Q-learning Based Routing**: Adaptive routing with multiple strategies
+- **Behavioral Scoring**: Karma-weighted decisions based on user behavior patterns
+- **Weighted Scoring Engine**: Multi-factor confidence calculation
+- **Alternative Agent Suggestions**: Fallback options with confidence scores
+- **Context-Aware Decisions**: Priority-based and domain-specific routing
+
+### 🔐 **Sovereign Core Integration (Phase 2.2)**
+- **STP Middleware**: Structured Token Protocol for secure packet transmission
+- **Karma Service**: Behavioral scoring from external Karma Tracker
+- **Sovereign Auth**: JWT-based authentication with service-to-service support
+- **Sovereign Database**: Async PostgreSQL interface with connection pooling
+- **Environment Loader**: Standardized configuration with secrets management
+
+### 📊 **API & Integration**
+- **Dual API Versioning**: v1 (legacy) and v2 (enhanced) with migration support
 - **Batch Processing**: Process multiple requests simultaneously (v2)
-- **Real-time Analytics**: Live performance monitoring and metrics visualization
-- **Multi-Agent Support**: NLP, TTS, Computer Vision, and custom agent types
 - **WebSocket Integration**: Real-time event streaming for instant updates
-- **Performance Tracking**: Comprehensive feedback loop and learning system
-- **Modern Dashboard**: React + TypeScript + Tailwind CSS admin interface
+- **STP Packet Wrapping**: Secure communication protocol
+- **KSML Compatibility**: Structured response formatting
+
+### 📈 **Analytics & Monitoring**
+- **Real-time Analytics**: Live performance monitoring and metrics
+- **Karma Metrics**: Behavioral scoring analytics and trends
+- **STP Metrics**: Packet transmission statistics
+- **Admin Dashboard**: Comprehensive control panel
+- **Performance Tracking**: Feedback loop and learning system
+
+### 🛠️ **Enterprise Features**
+- **Multi-Agent Support**: NLP, TTS, Computer Vision, and custom types
+- **Migration Tools**: Built-in tracking and conversion utilities
 - **Production Ready**: Docker containerization with health checks
-- **Migration Tools**: Built-in migration tracking and conversion utilities
+- **Backward Compatibility**: Seamless transition from legacy systems
+- **Modern Dashboard**: React + TypeScript + Tailwind CSS interface
 
 ## 📋 Prerequisites
 
 - Docker & Docker Compose
 - Node.js 18+ (for local development)
 - Python 3.11+ (for local development)
-- Supabase account (for database)
+- Supabase account (for database) OR Sovereign Core Database
+- Karma Tracker service (optional, for behavioral scoring)
 
 ## 🛠️ Installation & Setup
 
@@ -34,10 +58,10 @@ cd Insight_Flow
 
 ### 2. Configure Environment Variables
 
-Create `.env` file in the root directory:
+Create `.env` file in the backend directory:
 
 ```bash
-# Supabase Configuration
+# Supabase Configuration (Legacy Support)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_KEY=your-service-role-key
@@ -45,14 +69,93 @@ SUPABASE_SERVICE_KEY=your-service-role-key
 # JWT Configuration
 JWT_SECRET_KEY=your-super-secret-key-change-in-production
 JWT_ALGORITHM=HS256
+JWT_EXPIRATION_MINUTES=30
 
-# Application
-ENVIRONMENT=production
-DEBUG=False
+# Application Configuration
+APP_NAME=InsightFlow
+APP_VERSION=1.0.0
+DEBUG=True
+ENVIRONMENT=development
+
+# CORS Configuration
+CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+
+# Q-Learning Hyperparameters
+LEARNING_RATE=0.1
+DISCOUNT_FACTOR=0.95
+EPSILON=0.1
+MIN_EPSILON=0.01
+EPSILON_DECAY=0.995
+
+# Core Feedback Service
+CORE_FEEDBACK_SERVICE_URL=http://core-feedback:8000/api/scores
+CORE_FEEDBACK_CACHE_TTL=30
+CORE_FEEDBACK_TIMEOUT=5
+CORE_FEEDBACK_MAX_RETRIES=3
+
+# Routing Decision Logging
+ROUTING_LOG_DIR=logs
+ROUTING_LOG_RETENTION_DAYS=30
+
+# =============================================================================
+# STP-Layer Configuration (Phase 2.2)
+# =============================================================================
+
+# Enable STP wrapping (true/false)
+STP_ENABLED=true
+
+# STP destination system
+STP_DESTINATION=sovereign_core
+
+# Default priority (normal/high/critical)
+STP_DEFAULT_PRIORITY=normal
+
+# Require acknowledgment
+STP_REQUIRE_ACK=false
+
+# =============================================================================
+# Karma Weighting Configuration (Phase 2.2)
+# =============================================================================
+
+# Karma Tracker endpoint URL (Siddhesh's service)
+KARMA_ENDPOINT=http://localhost:8002/api/karma
+
+# Enable Karma weighting (true/false)
+KARMA_ENABLED=true
+
+# Karma cache TTL (seconds)
+KARMA_CACHE_TTL=60
+
+# Karma request timeout (seconds)
+KARMA_TIMEOUT=5
+
+# Karma weight in scoring (0-1)
+KARMA_WEIGHT=0.15
+
+# =============================================================================
+# Sovereign Core Configuration (Phase 2.2)
+# =============================================================================
+
+# Enable Sovereign Core (true/false)
+USE_SOVEREIGN_CORE=true
+
+# Sovereign Core Auth
+SOVEREIGN_AUTH_URL=http://localhost:8003/auth
+SOVEREIGN_SERVICE_KEY=your_service_key_here
+SOVEREIGN_JWT_SECRET=your_jwt_secret_here
+SOVEREIGN_JWT_ALGORITHM=HS256
+
+# Sovereign Core Database
+SOVEREIGN_DB_HOST=localhost
+SOVEREIGN_DB_PORT=5432
+SOVEREIGN_DB_NAME=insightflow_sovereign
+SOVEREIGN_DB_USER=insightflow_user
+SOVEREIGN_DB_PASSWORD=your_db_password_here
 ```
 
-### 3. Set Up Supabase Database
+### 3. Set Up Database
 
+#### Option A: Supabase (Legacy Support)
 Run these SQL commands in your Supabase SQL editor:
 
 ```sql
@@ -135,6 +238,9 @@ INSERT INTO agents (name, type, status, tags, capabilities) VALUES
  '[{"name": "object_detection", "description": "Detect objects in images", "confidence_threshold": 0.75}]'::jsonb);
 ```
 
+#### Option B: Sovereign Core Database (Recommended)
+Set up PostgreSQL database with the same schema using the Sovereign Core Database interface.
+
 ### 4. Build and Run with Docker Compose
 
 ```bash
@@ -157,6 +263,7 @@ docker-compose down
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
+- **Admin Panel**: http://localhost:8000/admin/system-health
 
 ## 🧪 Local Development
 
@@ -171,6 +278,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+pip install asyncpg python-dotenv  # Additional dependencies for Sovereign Core
 
 # Run development server
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -193,7 +301,7 @@ npm run build
 
 ## 📚 API Usage Examples
 
-### Route a Request (v2 Enhanced)
+### Enhanced Routing with Karma Weighting (v2)
 
 ```bash
 curl -X POST http://localhost:8000/api/v2/routing/route \
@@ -206,16 +314,33 @@ curl -X POST http://localhost:8000/api/v2/routing/route \
     "strategy": "q_learning",
     "context": {
       "priority": "high",
-      "domain": "weather"
+      "domain": "weather",
+      "user_id": "user123"
     },
     "preferences": {
       "max_latency_ms": 500,
-      "min_confidence": 0.8
+      "min_confidence": 0.8,
+      "enable_karma": true
     }
   }'
 ```
 
-### Batch Processing (v2 Only)
+### Route Agent with Karma Scoring
+
+```bash
+curl -X POST http://localhost:8000/api/v1/routing/route-agent \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_type": "nlp",
+    "context": {
+      "priority": "normal",
+      "user_id": "user123"
+    },
+    "confidence_threshold": 0.75
+  }'
+```
+
+### Batch Processing with STP Wrapping (v2)
 
 ```bash
 curl -X POST http://localhost:8000/api/v2/routing/batch \
@@ -227,11 +352,53 @@ curl -X POST http://localhost:8000/api/v2/routing/batch \
       {"input_data": {"text": "Query 1"}, "input_type": "text"},
       {"input_data": {"text": "Query 2"}, "input_type": "text"}
     ],
-    "strategy": "q_learning"
+    "strategy": "q_learning",
+    "enable_stp": true
   }'
 ```
 
-### Submit Feedback
+### Karma Control Endpoints
+
+```bash
+# Toggle Karma weighting
+curl -X POST "http://localhost:8000/api/karma/toggle" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+
+# Get Karma metrics
+curl -X GET "http://localhost:8000/api/karma/metrics"
+
+# Get agent Karma score
+curl -X GET "http://localhost:8000/api/karma/score/nlp-001"
+
+# Admin Karma controls (requires auth)
+curl -X POST "http://localhost:8000/admin/karma/toggle?enabled=true" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+curl -X GET "http://localhost:8000/admin/karma/metrics" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+curl -X DELETE "http://localhost:8000/admin/karma/cache" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### STP Packet Operations
+
+```bash
+# Get STP metrics
+curl -X GET "http://localhost:8000/api/stp/metrics"
+
+# Unwrap STP packet (for debugging)
+curl -X POST "http://localhost:8000/api/stp/unwrap" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "stp_token": "your_stp_token",
+    "payload": {"data": "encrypted_payload"},
+    "metadata": {"source": "client"}
+  }'
+```
+
+### Submit Feedback with Karma Impact
 
 ```bash
 curl -X POST http://localhost:8000/api/v2/routing/feedback \
@@ -243,31 +410,49 @@ curl -X POST http://localhost:8000/api/v2/routing/feedback \
     "success": true,
     "latency_ms": 145.5,
     "accuracy_score": 0.88,
-    "user_satisfaction": 4
+    "user_satisfaction": 4,
+    "karma_impact": true
   }'
 ```
 
-### Get Analytics
+### Analytics and Monitoring
 
 ```bash
+# Get comprehensive analytics
 curl http://localhost:8000/api/v1/analytics/overview?time_range=24h \
   -H "Authorization: Bearer YOUR_TOKEN"
-```
 
-### Migration Status
+# Get routing statistics
+curl http://localhost:8000/api/routing/statistics
 
-```bash
+# Get scoring weights
+curl http://localhost:8000/api/scoring/weights
+
+# Migration status
 curl http://localhost:8000/api/migration/status \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ## 🧪 Testing
 
-### Backend Tests
+### Comprehensive Endpoint Testing
 
 ```bash
 cd backend
+
+# Run comprehensive endpoint tests
+python test_all_endpoints.py
+
+# Run specific test suites
 pytest tests/ -v
+pytest tests/services/ -v
+pytest tests/middleware/ -v
+
+# Run Karma service tests
+pytest tests/services/test_karma_service.py -v
+
+# Run STP middleware tests
+pytest tests/middleware/test_stp_middleware.py -v
 ```
 
 ### Frontend Tests
@@ -281,7 +466,7 @@ npm run test
 
 ### Deploy to Cloud Platforms
 
-#### AWS ECS
+#### AWS ECS with Sovereign Core
 
 ```bash
 # Build and push Docker images to ECR
@@ -289,11 +474,18 @@ aws ecr get-login-password --region us-east-1 | docker login --username AWS --pa
 docker build -t insightflow-backend ./backend
 docker tag insightflow-backend:latest YOUR_ECR_URL/insightflow-backend:latest
 docker push YOUR_ECR_URL/insightflow-backend:latest
+
+# Deploy with environment variables for Sovereign Core
+aws ecs update-service --cluster your-cluster --service insightflow-service --force-new-deployment
 ```
 
-#### Kubernetes
+#### Kubernetes with ConfigMaps
 
 ```bash
+# Create ConfigMap for Sovereign Core configuration
+kubectl create configmap insightflow-config \
+  --from-env-file=backend/.env
+
 # Apply Kubernetes configurations
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
@@ -303,38 +495,90 @@ kubectl apply -f k8s/ingress.yaml
 #### Render/Railway
 
 1. Connect your GitHub repository
-2. Set environment variables
+2. Set environment variables (including Sovereign Core config)
 3. Deploy with automatic builds
 
-## 📊 System Architecture
+## 📊 Enhanced System Architecture
 
 ```
-User Request → API Version Detection → Enhanced Decision Engine → Agent Selection
-                        ↓                           ↓
-                Migration Tracking              Q-Learning Router
-                        ↓                           ↓
-                Analytics Dashboard         Selected Agent + Alternatives
+User Request → API Version Detection → STP Middleware → Enhanced Decision Engine
+                        ↓                      ↓                    ↓
+                Migration Tracking      Packet Wrapping      Karma Weighting
+                        ↓                      ↓                    ↓
+                Analytics Dashboard    Secure Transmission   Behavioral Scoring
+                                                    ↓
+                                            Agent Selection + Alternatives
                                                     ↓
                                             Feedback Collection
                                                     ↓
-                                      Performance Metrics Update
+                                      Performance + Karma Metrics Update
                                                     ↓
-                                          Q-Table Update (Learning)
+                                          Q-Table + Karma Update (Learning)
 ```
 
-## 🔄 API Migration
+### Sovereign Core Integration Flow
 
-InsightFlow supports both v1 (legacy) and v2 (enhanced) APIs:
+```
+Client Request → STP Wrapping → Karma Score Retrieval → Weighted Scoring
+                      ↓                    ↓                    ↓
+              Token Generation    Behavioral Analysis    Multi-factor Confidence
+                      ↓                    ↓                    ↓
+              Secure Transmission → Agent Selection → STP Response Wrapping
+```
 
-- **Current**: Both versions available with backward compatibility
-- **30 days**: v1 deprecation warnings
-- **60 days**: v1 removal
+## 🔄 API Migration & Compatibility
+
+InsightFlow supports multiple integration patterns:
+
+### **Current Support:**
+- **v1 API**: Legacy format with backward compatibility
+- **v2 API**: Enhanced with Karma, STP, and advanced features
+- **Supabase**: Legacy database support
+- **Sovereign Core**: Modern enterprise integration
+
+### **Migration Timeline:**
+- **Phase 1**: Dual API support (Current)
+- **Phase 2**: Sovereign Core integration (Current)
+- **Phase 3**: v1 deprecation warnings (30 days)
+- **Phase 4**: v1 removal (60 days)
 
 ### Migration Resources
 - **Migration Guide**: [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
 - **API Versioning**: [docs/API_VERSIONING.md](docs/API_VERSIONING.md)
+- **STP Implementation**: [docs/STP_IMPLEMENTATION.md](docs/STP_IMPLEMENTATION.md)
 - **Migration Status**: `GET /api/migration/status`
 - **Conversion Tools**: `POST /api/migration/convert/request`
+
+## 🔧 Configuration Management
+
+### Environment-Based Configuration
+
+```bash
+# Development
+ENVIRONMENT=development
+USE_SOVEREIGN_CORE=false
+KARMA_ENABLED=true
+STP_ENABLED=false
+
+# Staging
+ENVIRONMENT=staging
+USE_SOVEREIGN_CORE=true
+KARMA_ENABLED=true
+STP_ENABLED=true
+
+# Production
+ENVIRONMENT=production
+USE_SOVEREIGN_CORE=true
+KARMA_ENABLED=true
+STP_ENABLED=true
+```
+
+### Feature Toggles
+
+- **Karma Weighting**: Runtime toggle via API or environment
+- **STP Middleware**: Enable/disable secure packet transmission
+- **Sovereign Core**: Switch between Supabase and Sovereign Core
+- **API Versioning**: Control v1/v2 availability
 
 ## 🤝 Contributing
 
@@ -344,45 +588,78 @@ InsightFlow supports both v1 (legacy) and v2 (enhanced) APIs:
 4. Push to branch (`git push origin feature/AmazingFeature`)
 5. Open Pull Request
 
+### Development Guidelines
+
+- Follow existing code patterns
+- Add tests for new features
+- Update documentation
+- Maintain backward compatibility
+- Use type hints and docstrings
+
 ## 📝 License
 
 MIT License - see LICENSE file for details
 
 ## 👥 Team
 
-- **Lead Developer**: Ashmit
+- **Lead Developer**: Ashmit Pandey
 - **Analytics Core**: Nisarg
 - **Infrastructure**: Bucket Team
+- **Karma Integration**: Siddhesh (Karma Tracker Service)
 
 ## 📧 Support
 
 For support, email support@insightflow.ai or open an issue on GitHub.
 
+## 🏆 Acknowledgments
+
+- **Sovereign Core Team**: For enterprise integration framework
+- **Karma Tracker Team**: For behavioral scoring service
+- **Community Contributors**: For feedback and improvements
+
 ---
 
-**Built with ❤️ using FastAPI, React, Supabase, and Q-Learning**
+**Built with ❤️ using FastAPI, React, Supabase, Q-Learning, and Sovereign Core**
 
 ## 🎯 Quick Start Commands Summary
 
 ```bash
-# Complete setup in 3 commands
+# Complete setup in 4 commands
 git clone https://github.com/blackholeinfiverse54-creator/Insight_Flow.git
-cd Insight_Flow
-cp .env.example .env  # Edit with your Supabase credentials
+cd Insight_Flow/backend
+cp .env.example .env  # Edit with your configuration
 docker-compose up --build
 
-# Access at http://localhost:3000
+# Access at http://localhost:3000 (Frontend) and http://localhost:8000 (API)
 ```
 
-## 📦 Project Size & Complexity
+## 📦 Project Statistics
 
-- **Backend**: ~25 files, ~3500 lines of Python
-- **Frontend**: ~12 files, ~1200 lines of TypeScript/React
-- **Documentation**: Comprehensive migration and API guides
-- **Total**: Production-ready full-stack application with migration support
-- **Build Time**: ~5 minutes
-- **Deployment Time**: ~10 minutes
+- **Backend**: ~45 files, ~8,500 lines of Python
+- **Frontend**: ~15 files, ~1,500 lines of TypeScript/React
+- **Tests**: ~25 test files with comprehensive coverage
+- **Documentation**: Complete API guides and migration docs
+- **Total**: Production-ready full-stack application with enterprise features
+- **Build Time**: ~7 minutes
+- **Deployment Time**: ~12 minutes
 - **Migration**: Automated tracking and conversion tools
+
+## 🌟 Latest Updates (Phase 2.2)
+
+### ✨ **New in v2.2:**
+- **Sovereign Core Integration**: Enterprise-grade security and database
+- **Karma Behavioral Scoring**: AI-driven user behavior analysis
+- **STP Middleware**: Secure token protocol for packet transmission
+- **Enhanced Admin Controls**: Real-time system management
+- **Comprehensive Testing**: Full endpoint and integration test coverage
+- **Migration Support**: Seamless transition tools and guides
+
+### 🔮 **Coming Soon:**
+- **Advanced Analytics Dashboard**: Real-time behavioral insights
+- **Multi-tenant Support**: Organization-level isolation
+- **Advanced Security**: OAuth2, RBAC, and audit logging
+- **Performance Optimization**: Caching layers and load balancing
+- **Mobile SDK**: Native mobile app integration
 
 ---
 
