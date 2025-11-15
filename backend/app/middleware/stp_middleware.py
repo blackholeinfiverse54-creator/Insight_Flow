@@ -29,6 +29,7 @@ import json
 import logging
 import hashlib
 import time
+import secrets
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from enum import Enum
@@ -76,14 +77,16 @@ class STPMiddleware:
     STP_VERSION = "1.0"
     SOURCE = "insightflow"
     
-    def __init__(self, enable_stp: bool = True):
+    def __init__(self, enable_stp: bool = True, strict_checksum: bool = True):
         """
         Initialize STP middleware.
         
         Args:
             enable_stp: Enable/disable STP wrapping (for gradual rollout)
+            strict_checksum: Reject packets with invalid checksums (True) or warn only (False)
         """
         self.enable_stp = enable_stp
+        self.strict_checksum = strict_checksum
         self.metrics = {
             "packets_wrapped": 0,
             "packets_unwrapped": 0,
@@ -92,20 +95,22 @@ class STPMiddleware:
         }
         
         logger.info(
-            f"STPMiddleware initialized (enabled={enable_stp})"
+            f"STPMiddleware initialized (enabled={enable_stp}, strict_checksum={strict_checksum})"
         )
     
     @staticmethod
     def generate_stp_token() -> str:
         """
-        Generate unique STP token.
+        Generate cryptographically secure unique STP token.
         
-        Format: stp-{timestamp_hash}{random_suffix}
-        Returns: Unique STP token string
+        Format: stp-{secure_random_hex}
+        Returns: Unique STP token string with 128 bits of entropy
         """
-        timestamp = str(time.time_ns())
-        hash_base = hashlib.sha256(timestamp.encode()).hexdigest()[:12]
-        return f"stp-{hash_base}"
+        # Generate 16 bytes (128 bits) of cryptographically secure random data
+        random_bytes = secrets.token_bytes(16)
+        # Convert to hex for readability
+        random_hex = random_bytes.hex()
+        return f"stp-{random_hex}"
     
     @staticmethod
     def calculate_checksum(payload: Dict[str, Any]) -> str:
@@ -227,11 +232,16 @@ class STPMiddleware:
             
             if expected_checksum != calculated_checksum:
                 self.metrics["checksum_failures"] += 1
-                logger.warning(
+                error_msg = (
                     f"Checksum mismatch for {stp_packet['stp_token']}: "
                     f"expected {expected_checksum}, got {calculated_checksum}"
                 )
-                # Continue anyway but log warning
+                
+                if self.strict_checksum:
+                    logger.error(f"REJECTED: {error_msg}")
+                    raise STPLayerError(f"Packet rejected due to checksum failure: {error_msg}")
+                else:
+                    logger.warning(f"WARNING: {error_msg} (continuing with corrupted data)")
             
             # Extract metadata
             metadata = {
@@ -364,6 +374,9 @@ class STPMiddleware:
             "packets_unwrapped": 0,
             "errors": 0,
             "checksum_failures": 0,
+            "wrapping_failures": 0,
+            "unwrapping_failures": 0,
+            "fallback_responses": 0,
         }
         logger.info("STP metrics reset")
 

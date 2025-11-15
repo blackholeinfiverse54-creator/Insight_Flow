@@ -101,9 +101,8 @@ class RoutingDecisionLogger:
             if response_time_ms is not None:
                 log_entry["response_time_ms"] = float(response_time_ms)
             
-            # Write to log file
-            with open(self.log_file, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
+            # Atomic write to prevent corruption
+            self._atomic_write(json.dumps(log_entry) + '\n')
             
             logger.debug(
                 f"Logged routing decision: {agent_selected} "
@@ -262,6 +261,38 @@ class RoutingDecisionLogger:
         except Exception as e:
             logger.error(f"Error cleaning up old logs: {str(e)}")
             return 0
+    
+    def _atomic_write(self, content: str) -> None:
+        """
+        Atomically write content to log file to prevent corruption.
+        
+        Args:
+            content: Content to write
+        """
+        import tempfile
+        
+        # Write to temporary file first
+        temp_file = self.log_file.with_suffix('.tmp')
+        
+        try:
+            # If log file exists, copy existing content to temp file
+            if self.log_file.exists():
+                with open(self.log_file, 'r') as src, open(temp_file, 'w') as dst:
+                    dst.write(src.read())
+                    dst.write(content)
+            else:
+                # New file
+                with open(temp_file, 'w') as f:
+                    f.write(content)
+            
+            # Atomic move (rename) - this is atomic on most filesystems
+            temp_file.replace(self.log_file)
+            
+        except Exception as e:
+            # Clean up temp file on error
+            if temp_file.exists():
+                temp_file.unlink()
+            raise e
     
     @staticmethod
     def _summarize_context(context: Dict[str, Any]) -> str:

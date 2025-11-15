@@ -12,6 +12,7 @@ from datetime import datetime
 from app.utils.routing_decision_logger import get_routing_logger
 from app.core.security import get_current_user
 from app.services.karma_service import KarmaServiceClient
+from app.ml.q_learning_updater import get_q_updater
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -263,4 +264,66 @@ async def clear_karma_cache(
         raise HTTPException(
             status_code=500,
             detail=f"Error clearing cache: {str(e)}"
+        )
+
+
+@router.get("/q-learning/trace")
+async def get_learning_trace(limit: int = Query(100, ge=1, le=1000)):
+    """
+    Get Q-learning trace history.
+    
+    Returns recent Q-updates with before/after confidence values.
+    """
+    try:
+        q_updater = get_q_updater()
+        trace = q_updater.get_learning_trace(limit=limit)
+        
+        return {
+            "success": True,
+            "count": len(trace),
+            "trace": trace
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving trace: {str(e)}"
+        )
+
+
+@router.post("/q-learning/save")
+async def save_q_table():
+    """Save Q-table to disk"""
+    try:
+        q_updater = get_q_updater()
+        q_updater.save_q_table()
+        
+        return {
+            "success": True,
+            "message": "Q-table saved successfully"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving Q-table: {str(e)}"
+        )
+
+
+@router.post("/q-learning/load")
+async def load_q_table():
+    """Load Q-table from disk"""
+    try:
+        q_updater = get_q_updater()
+        q_updater.load_q_table()
+        
+        return {
+            "success": True,
+            "message": "Q-table loaded successfully"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading Q-table: {str(e)}"
         )

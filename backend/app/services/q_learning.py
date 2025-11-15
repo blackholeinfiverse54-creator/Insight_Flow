@@ -1,9 +1,11 @@
 import numpy as np
 from typing import Dict, Tuple, Optional, List
 import logging
+from datetime import datetime
 from app.core.config import settings
 from app.core.database import get_db
 import json
+import atexit
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +40,20 @@ class QLearningRouter:
         # Q-table: {(state, action): q_value}
         self.q_table: Dict[Tuple[str, str], float] = {}
         
+        # Persistence tracking
+        self._unsaved_updates = 0
+        self._save_threshold = 10  # Save after 10 updates
+        self._last_save_time = datetime.now()
+        self._save_interval = 300  # Save every 5 minutes
+        
         # Load existing Q-table from database
         self._load_q_table()
         
         logger.info(f"Q-Learning router initialized with lr={self.learning_rate}, "
                    f"gamma={self.discount_factor}, epsilon={self.epsilon}")
+        
+        # Register cleanup on exit
+        atexit.register(self.force_save_q_table)
     
     def _load_q_table(self):
         """Load Q-table from database"""
@@ -61,8 +72,8 @@ class QLearningRouter:
         except Exception as e:
             logger.warning(f"Could not load Q-table: {e}. Starting with empty Q-table.")
     
-    def _save_q_table(self):
-        """Save Q-table to database"""
+    def _save_q_table(self, force: bool = False):
+        """Save Q-table to database with crash-safe mechanism"""
         try:
             db = get_db()
             
@@ -79,13 +90,31 @@ class QLearningRouter:
             # Batch upsert to database
             if records:
                 db.table("q_learning_table").upsert(records).execute()
+                self._unsaved_updates = 0
+                self._last_save_time = datetime.now()
                 logger.info(f"Saved {len(records)} Q-table entries to database")
         except Exception as e:
             logger.error(f"Failed to save Q-table: {e}")
     
+    def _check_and_save_q_table(self):
+        """Check if Q-table should be saved based on updates or time"""
+        current_time = datetime.now()
+        time_since_save = (current_time - self._last_save_time).total_seconds()
+        
+        # Save if threshold reached or time interval exceeded
+        if (self._unsaved_updates >= self._save_threshold or 
+            time_since_save >= self._save_interval):
+            self._save_q_table()
+    
+    def force_save_q_table(self):
+        """Force immediate save of Q-table (for shutdown/critical updates)"""
+        if self._unsaved_updates > 0:
+            self._save_q_table(force=True)
+            logger.info("Force saved Q-table due to critical update")
+    
     def _get_state_representation(self, context: Dict) -> str:
         """
-        Convert context to state representation
+        Convert context to enhanced state representation
         
         Args:
             context: Request context dictionary
@@ -93,16 +122,31 @@ class QLearningRouter:
         Returns:
             State string representation
         """
-        # Simplified state representation based on input type and context
-        input_type = context.get("input_type", "unknown")
-        has_user_history = "user_id" in context
-        complexity = context.get("complexity", "medium")
+        # Enhanced state features
+        input_type = str(context.get("input_type", "unknown"))[:10]
+        priority = str(context.get("priority", "normal"))[:8]
+        domain = str(context.get("domain", "general"))[:10]
         
-        # Sanitize inputs to prevent injection
-        input_type = str(input_type).replace('_', '').replace('|', '')[:20]
-        complexity = str(complexity).replace('_', '').replace('|', '')[:10]
+        # Time-based features
+        import datetime
+        hour = datetime.datetime.now().hour
+        time_period = "night" if hour < 6 or hour > 22 else "day"
         
-        return f"{input_type}_{complexity}_{has_user_history}"
+        # User context features
+        has_user_id = "user_id" in context
+        user_type = "returning" if has_user_id else "new"
+        
+        # Request complexity indicators
+        complexity = "high" if context.get("preferences", {}).get("min_confidence", 0) > 0.8 else "normal"
+        
+        # Agent load balancing hint
+        load_hint = context.get("load_balancing", "balanced")
+        
+        # Sanitize and combine features
+        features = [input_type, priority, domain, time_period, user_type, complexity, load_hint]
+        sanitized = [f.replace('_', '').replace('|', '') for f in features]
+        
+        return "|".join(sanitized)
     
     def select_agent(
         self,
@@ -187,9 +231,11 @@ class QLearningRouter:
         # Decay epsilon
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
         
-        # Periodically save Q-table
-        if len(self.q_table) % 100 == 0:
-            self._save_q_table()
+        # Track unsaved updates
+        self._unsaved_updates += 1
+        
+        # Event-driven persistence
+        self._check_and_save_q_table()
     
     def process_feedback(
         self,
@@ -253,15 +299,45 @@ class QLearningRouter:
         
         return np.clip(reward, -1.0, 1.0)
     
+    def _extract_state_features(self, state: str) -> Dict:
+        """Extract features from state string for analysis"""
+        try:
+            parts = state.split("|")
+            if len(parts) >= 7:
+                return {
+                    "input_type": parts[0],
+                    "priority": parts[1], 
+                    "domain": parts[2],
+                    "time_period": parts[3],
+                    "user_type": parts[4],
+                    "complexity": parts[5],
+                    "load_hint": parts[6]
+                }
+        except:
+            pass
+        return {"raw_state": state}
+    
     def get_statistics(self) -> Dict:
-        """Get Q-learning statistics"""
+        """Get enhanced Q-learning statistics"""
+        states = set(state for state, _ in self.q_table.keys())
+        
+        # Analyze state distribution
+        state_features = {}
+        for state in states:
+            features = self._extract_state_features(state)
+            for key, value in features.items():
+                if key not in state_features:
+                    state_features[key] = {}
+                state_features[key][value] = state_features[key].get(value, 0) + 1
+        
         return {
             "q_table_size": len(self.q_table),
             "epsilon": self.epsilon,
             "learning_rate": self.learning_rate,
             "discount_factor": self.discount_factor,
-            "states_explored": len(set(state for state, _ in self.q_table.keys())),
-            "avg_q_value": np.mean(list(self.q_table.values())) if self.q_table else 0.0
+            "states_explored": len(states),
+            "avg_q_value": np.mean(list(self.q_table.values())) if self.q_table else 0.0,
+            "state_feature_distribution": state_features
         }
 
 

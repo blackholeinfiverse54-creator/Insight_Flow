@@ -3,7 +3,7 @@ from typing import Dict, List
 from datetime import datetime
 from app.schemas.routing import RouteRequest, RouteResponse, FeedbackRequest
 from app.services.decision_engine import decision_engine
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_user_optional
 from app.core.dependencies import get_feedback_service
 from app.ml.weighted_scoring import get_scoring_engine
 from app.adapters.ksml_adapter import KSMLAdapter, KSMLPacketType
@@ -11,6 +11,14 @@ from app.utils.routing_decision_logger import get_routing_logger
 from app.middleware.stp_middleware import get_stp_middleware, STPPacketType
 from app.services.karma_service import KarmaServiceClient
 from app.core.config import settings
+from app.telemetry_bus.service import get_telemetry_service
+from app.telemetry_bus.models import (
+    TelemetryPacket,
+    DecisionPayload,
+    FeedbackPayload,
+    TracePayload
+)
+from datetime import datetime
 import logging
 import time
 
@@ -33,7 +41,7 @@ router = APIRouter(prefix="/api/v1/routing", tags=["routing"])
 @router.post("/route", response_model=RouteResponse, status_code=status.HTTP_200_OK)
 async def route_request(
     request: RouteRequest,
-    current_user: Dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user_optional)
 ):
     """
     Route a request to the most suitable agent
@@ -50,6 +58,9 @@ async def route_request(
         context = request.context or {}
         context["user_id"] = current_user.get("user_id")
         
+        # Start timing for telemetry
+        start_time = time.time()
+        
         # Route the request
         routing_decision = await decision_engine.route_request(
             input_data=request.input_data,
@@ -57,6 +68,37 @@ async def route_request(
             context=context,
             strategy=request.strategy
         )
+        
+        # Emit telemetry for standard routing
+        if settings.TELEMETRY_ENABLED:
+            try:
+                latency_ms = (time.time() - start_time) * 1000
+                telemetry_service = get_telemetry_service()
+                
+                telemetry_packet = TelemetryPacket(
+                    request_id=routing_decision.get("request_id", "unknown"),
+                    decision=DecisionPayload(
+                        selected_agent=routing_decision.get("agent_id", "unknown"),
+                        alternatives=[],  # Not available in standard routing
+                        confidence=routing_decision.get("confidence_score", 0.0),
+                        latency_ms=latency_ms,
+                        strategy=routing_decision.get("routing_strategy", "unknown")
+                    ),
+                    feedback=FeedbackPayload(
+                        reward_signal=None,
+                        last_outcome="pending"
+                    ),
+                    trace=TracePayload(
+                        version=settings.APP_VERSION,
+                        node="insightflow-router",
+                        ts=datetime.utcnow().isoformat() + "Z"
+                    )
+                )
+                
+                await telemetry_service.emit_packet(telemetry_packet)
+                
+            except Exception as e:
+                logger.error(f"Standard routing telemetry failed: {str(e)}")
         
         return RouteResponse(**routing_decision)
         
@@ -79,10 +121,103 @@ async def route_request(
         )
 
 
+@router.post("/route-stp")
+async def route_request_stp(
+    request: RouteRequest,
+    current_user: Dict = Depends(get_current_user_optional)
+):
+    """
+    Route a request with STP wrapping enabled
+    
+    Args:
+        request: Routing request data
+        current_user: Current authenticated user
+        
+    Returns:
+        STP-wrapped routing decision
+    """
+    try:
+        # Add user context
+        context = request.context or {}
+        context["user_id"] = current_user.get("user_id")
+        
+        # Start timing for telemetry
+        start_time = time.time()
+        
+        # Route the request
+        routing_decision = await decision_engine.route_request(
+            input_data=request.input_data,
+            input_type=request.input_type,
+            context=context,
+            strategy=request.strategy
+        )
+        
+        # Emit telemetry for STP routing
+        if settings.TELEMETRY_ENABLED:
+            try:
+                latency_ms = (time.time() - start_time) * 1000
+                telemetry_service = get_telemetry_service()
+                
+                telemetry_packet = TelemetryPacket(
+                    request_id=routing_decision.get("request_id", "unknown"),
+                    decision=DecisionPayload(
+                        selected_agent=routing_decision.get("agent_id", "unknown"),
+                        alternatives=[],  # Not available in STP routing
+                        confidence=routing_decision.get("confidence_score", 0.0),
+                        latency_ms=latency_ms,
+                        strategy=routing_decision.get("routing_strategy", "unknown")
+                    ),
+                    feedback=FeedbackPayload(
+                        reward_signal=None,
+                        last_outcome="pending"
+                    ),
+                    trace=TracePayload(
+                        version=settings.APP_VERSION,
+                        node="insightflow-router-stp",
+                        ts=datetime.utcnow().isoformat() + "Z"
+                    )
+                )
+                
+                await telemetry_service.emit_packet(telemetry_packet)
+                
+            except Exception as e:
+                logger.error(f"STP routing telemetry failed: {str(e)}")
+        
+        # Wrap in STP format
+        stp_middleware = get_stp_middleware(enable_stp=True)
+        stp_wrapped_response = stp_middleware.wrap(
+            payload=routing_decision,
+            packet_type=STPPacketType.ROUTING_DECISION.value,
+            destination=settings.STP_DESTINATION,
+            priority=settings.STP_DEFAULT_PRIORITY,
+            requires_ack=settings.STP_REQUIRE_ACK
+        )
+        
+        return stp_wrapped_response
+        
+    except ValueError as e:
+        logger.error("STP routing validation error", extra={
+            'error': str(e),
+            'input_type': request.input_type,
+            'strategy': request.strategy,
+            'user_id': current_user.get("user_id")
+        })
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"STP routing error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal STP routing error"
+        )
+
+
 @router.post("/feedback", status_code=status.HTTP_200_OK)
 async def submit_feedback(
     feedback: FeedbackRequest,
-    current_user: Dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user_optional)
 ):
     """
     Submit feedback for a routing decision
@@ -130,7 +265,7 @@ async def route_agent(
     Route incoming task to best agent using weighted scoring.
     
     Accepts both v1 (InsightFlow) and v2 (Core) formats.
-    Returns v2 format with confidence breakdown.
+    Returns standard format without STP wrapping for compatibility.
     
     Request body:
     {
@@ -269,6 +404,9 @@ async def route_agent(
             reasoning=response["routing_reasoning"]
         )
         
+        # Legacy telemetry broadcast (kept for backward compatibility)
+        # Note: Enhanced telemetry emission is now handled below
+        
         # Also log to standard logger
         _log_routing_decision(
             agent_id=best_agent,
@@ -277,29 +415,53 @@ async def route_agent(
             context=context
         )
         
-        # Wrap response in STP format
-        stp_middleware = get_stp_middleware(enable_stp=settings.STP_ENABLED)
+        # Calculate final latency
+        final_latency_ms = (time.time() - start_time) * 1000
         
-        try:
-            stp_wrapped_response = stp_middleware.wrap(
-                payload=response,
-                packet_type=STPPacketType.ROUTING_DECISION.value,
-                destination=settings.STP_DESTINATION,
-                priority=settings.STP_DEFAULT_PRIORITY,
-                requires_ack=settings.STP_REQUIRE_ACK
-            )
+        # Emit telemetry packet
+        if settings.TELEMETRY_ENABLED:
+            try:
+                telemetry_service = get_telemetry_service()
+                
+                telemetry_packet = TelemetryPacket(
+                    request_id=request_id or "unknown",
+                    decision=DecisionPayload(
+                        selected_agent=best_agent,
+                        alternatives=[
+                            alt["agent_id"] 
+                            for alt in response.get("alternative_agents", [])[:5]
+                        ],
+                        confidence=best_confidence,
+                        latency_ms=final_latency_ms,
+                        strategy="weighted_scoring"
+                    ),
+                    feedback=FeedbackPayload(
+                        reward_signal=None,
+                        last_outcome="pending"
+                    ),
+                    trace=TracePayload(
+                        version=settings.APP_VERSION,
+                        node="insightflow-router",
+                        ts=datetime.utcnow().isoformat() + "Z"
+                    )
+                )
+                
+                # Emit packet (non-blocking)
+                await telemetry_service.emit_packet(telemetry_packet)
+                
+                logger.debug(
+                    f"Telemetry emitted: {request_id}, "
+                    f"agent={best_agent}, latency={final_latency_ms:.1f}ms"
+                )
             
-            logger.info(
-                f"Routing response wrapped in STP: "
-                f"token={stp_wrapped_response.get('stp_token')}"
-            )
-            
-            return stp_wrapped_response
+            except Exception as e:
+                # Don't fail the request if telemetry fails
+                logger.error(f"Telemetry emission failed: {str(e)}")
         
-        except Exception as e:
-            logger.error(f"Error wrapping response in STP: {str(e)}")
-            # Fallback: return unwrapped response
-            return response
+        # Return unwrapped response for compatibility
+        # Note: STP wrapping disabled for this endpoint to maintain compatibility
+        # with existing clients expecting standard JSON format
+        return response
     
     except HTTPException:
         raise

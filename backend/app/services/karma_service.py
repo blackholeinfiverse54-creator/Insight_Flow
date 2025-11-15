@@ -62,8 +62,12 @@ class KarmaServiceClient:
         self.max_retries = max_retries
         self.enabled = enabled
         
-        # Karma score cache: {agent_id: (score, timestamp)}
+        # Karma score cache: {agent_id: (score, timestamp, performance_baseline)}
         self._karma_cache: Dict[str, tuple] = {}
+        
+        # Performance tracking for cache invalidation
+        self._performance_history: Dict[str, List[float]] = {}
+        self._invalidation_threshold = 0.2  # 20% performance change triggers invalidation
         
         # Metrics
         self.metrics = {
@@ -72,6 +76,7 @@ class KarmaServiceClient:
             "cache_misses": 0,
             "errors": 0,
             "retries": 0,
+            "non_retryable_errors": 0,
         }
         
         logger.info(
@@ -105,8 +110,9 @@ class KarmaServiceClient:
         # Fetch from Karma Tracker
         score = await self._fetch_karma_from_endpoint(agent_id)
         
-        # Cache result
-        self._karma_cache[agent_id] = (score, datetime.utcnow())
+        # Cache result with performance baseline
+        current_performance = await self._get_agent_performance(agent_id)
+        self._karma_cache[agent_id] = (score, datetime.utcnow(), current_performance)
         
         return score
     
@@ -178,9 +184,25 @@ class KarmaServiceClient:
             logger.error(f"Error fetching Karma details: {e}")
             return None
     
+    def _should_retry(self, error: Exception, status_code: int = None) -> bool:
+        """Determine if error should be retried based on failure type"""
+        # Don't retry client errors (4xx)
+        if status_code and 400 <= status_code < 500:
+            return False
+        
+        # Retry on network/timeout errors
+        if isinstance(error, (asyncio.TimeoutError, aiohttp.ClientError)):
+            return True
+        
+        # Retry on server errors (5xx)
+        if status_code and status_code >= 500:
+            return True
+        
+        return False
+    
     async def _fetch_karma_from_endpoint(self, agent_id: str) -> float:
         """
-        Fetch Karma score from Karma Tracker endpoint with retry logic.
+        Fetch Karma score from Karma Tracker endpoint with smart retry logic.
         
         Args:
             agent_id: Agent identifier
@@ -202,71 +224,77 @@ class KarmaServiceClient:
                         if response.status == 200:
                             data = await response.json()
                             score = float(data.get("karma_score", 0.0))
-                            
-                            # Clamp to valid range
                             score = max(-1.0, min(1.0, score))
-                            
-                            logger.info(
-                                f"Retrieved Karma for {agent_id}: {score}"
-                            )
+                            logger.info(f"Retrieved Karma for {agent_id}: {score}")
                             return score
-                        else:
-                            logger.warning(
-                                f"Karma endpoint returned {response.status} "
-                                f"for {agent_id}"
-                            )
-            
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"Timeout on attempt {attempt + 1}/{self.max_retries} "
-                    f"for {agent_id}"
-                )
-                self.metrics["retries"] += 1
-                
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                        
+                        # Check if we should retry based on status code
+                        if not self._should_retry(None, response.status):
+                            logger.warning(f"Non-retryable error {response.status} for {agent_id}")
+                            break
+                        
+                        logger.warning(f"Retryable error {response.status} for {agent_id}")
             
             except Exception as e:
-                logger.error(
-                    f"Error fetching Karma on attempt {attempt + 1}: {e}"
-                )
+                # Check if we should retry this error type
+                if not self._should_retry(e):
+                    logger.error(f"Non-retryable error for {agent_id}: {e}")
+                    self.metrics["non_retryable_errors"] += 1
+                    break
+                
+                logger.warning(f"Retryable error on attempt {attempt + 1}: {e}")
                 self.metrics["retries"] += 1
                 
+                # Only sleep if we're going to retry
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
         
-        # All retries exhausted
-        logger.error(
-            f"Failed to retrieve Karma for {agent_id} after "
-            f"{self.max_retries} attempts"
-        )
         self.metrics["errors"] += 1
-        return 0.0  # Neutral score on failure
+        return 0.0
     
     def _is_cached(self, agent_id: str) -> bool:
-        """Check if Karma score is cached and not expired"""
+        """Check if Karma score is cached, not expired, and performance hasn't changed significantly"""
         if agent_id not in self._karma_cache:
             return False
         
-        _, timestamp = self._karma_cache[agent_id]
+        score, timestamp, baseline_performance = self._karma_cache[agent_id]
         age = (datetime.utcnow() - timestamp).total_seconds()
         
-        return age < self.cache_ttl
+        # Check time-based expiration
+        if age >= self.cache_ttl:
+            return False
+        
+        # Check performance-based invalidation
+        if self._should_invalidate_cache(agent_id, baseline_performance):
+            logger.debug(f"Invalidating cache for {agent_id} due to performance change")
+            del self._karma_cache[agent_id]
+            return False
+        
+        return True
     
-    def clear_cache(self, agent_id: Optional[str] = None):
+    def clear_cache(self, agent_id: Optional[str] = None) -> bool:
         """
         Clear Karma cache for specific agent or all agents.
         
         Args:
             agent_id: Agent to clear cache for, or None to clear all
+        
+        Returns:
+            True if cache was cleared successfully, False if agent not found
         """
         if agent_id is None:
+            cache_size = len(self._karma_cache)
             self._karma_cache.clear()
-            logger.info("Cleared all Karma caches")
+            logger.info(f"Cleared all Karma caches ({cache_size} entries)")
+            return True
         else:
             if agent_id in self._karma_cache:
                 del self._karma_cache[agent_id]
                 logger.debug(f"Cleared Karma cache for {agent_id}")
+                return True
+            else:
+                logger.debug(f"No cache entry found for {agent_id}")
+                return False
     
     def toggle_karma_weighting(self, enabled: bool):
         """
@@ -278,12 +306,79 @@ class KarmaServiceClient:
         self.enabled = enabled
         logger.info(f"Karma weighting {'enabled' if enabled else 'disabled'}")
     
+    async def _get_agent_performance(self, agent_id: str) -> float:
+        """Get current agent performance for cache invalidation"""
+        try:
+            # Simplified performance calculation - in real implementation,
+            # this would fetch from agent performance metrics
+            details = await self.get_karma_details(agent_id)
+            if details:
+                return details.karma_score
+            return 0.0
+        except Exception:
+            return 0.0
+    
+    def _should_invalidate_cache(self, agent_id: str, baseline_performance: float) -> bool:
+        """Check if cache should be invalidated due to performance drift"""
+        try:
+            # Get recent performance history
+            if agent_id not in self._performance_history:
+                return False
+            
+            recent_performance = self._performance_history[agent_id][-5:]  # Last 5 measurements
+            if len(recent_performance) < 3:
+                return False
+            
+            avg_recent = sum(recent_performance) / len(recent_performance)
+            performance_drift = abs(avg_recent - baseline_performance)
+            
+            return performance_drift > self._invalidation_threshold
+        except Exception:
+            return False
+    
+    async def update_agent_performance(self, agent_id: str, performance_score: float):
+        """Update agent performance history for cache invalidation"""
+        if agent_id not in self._performance_history:
+            self._performance_history[agent_id] = []
+        
+        self._performance_history[agent_id].append(performance_score)
+        
+        # Keep only last 10 measurements
+        if len(self._performance_history[agent_id]) > 10:
+            self._performance_history[agent_id] = self._performance_history[agent_id][-10:]
+        
+        # Check if cache should be invalidated
+        if agent_id in self._karma_cache:
+            _, _, baseline = self._karma_cache[agent_id]
+            if self._should_invalidate_cache(agent_id, baseline):
+                self.clear_cache(agent_id)
+                logger.info(f"Invalidated cache for {agent_id} due to performance change")
+    
+    def invalidate_cache_by_performance_change(self, agent_id: str, old_performance: float, new_performance: float):
+        """Invalidate cache if performance change exceeds threshold"""
+        performance_change = abs(new_performance - old_performance)
+        
+        if performance_change > self._invalidation_threshold:
+            if self.clear_cache(agent_id):
+                logger.info(
+                    f"Invalidated cache for {agent_id} due to significant performance change: "
+                    f"{old_performance:.3f} -> {new_performance:.3f} (change: {performance_change:.3f})"
+                )
+    
     def get_metrics(self) -> Dict:
-        """Get service metrics"""
+        """Get service metrics with cache invalidation stats"""
+        cache_ages = []
+        for agent_id, (_, timestamp, _) in self._karma_cache.items():
+            age = (datetime.utcnow() - timestamp).total_seconds()
+            cache_ages.append(age)
+        
         return {
             **self.metrics,
             "cache_size": len(self._karma_cache),
             "enabled": self.enabled,
+            "avg_cache_age_seconds": sum(cache_ages) / len(cache_ages) if cache_ages else 0,
+            "performance_tracking_agents": len(self._performance_history),
+            "invalidation_threshold": self._invalidation_threshold
         }
 
 

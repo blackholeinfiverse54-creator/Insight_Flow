@@ -1,4 +1,4 @@
-import { WebSocketMessage } from '@/types';
+import { WebSocketMessage } from '../types';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
 
@@ -95,6 +95,10 @@ class WebSocketService {
     } else {
       console.warn('WebSocket is not connected');
     }
+  }
+
+  isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
   }
 }
 

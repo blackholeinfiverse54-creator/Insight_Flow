@@ -8,19 +8,43 @@ from typing import Dict
 
 from app.core.config import settings
 from app.core.database import init_database
-from app.routers import routing, agents, analytics, websocket, auth, migration
+from app.routers import routing, agents, analytics, websocket, auth, migration, health
+from app.telemetry_bus import telemetry_router
 from app.api.v1 import routing as routing_v1
 from app.api.v2 import routing as routing_v2
 from app.api.routes import admin
 from app.api.routes import dashboard as dashboard_routes
+from app.api.routes.feedback import feedback_router
 from app.api.middleware.version_detector import detect_api_version, add_version_headers
 from app.middleware.migration_middleware import MigrationMiddleware
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO if not settings.DEBUG else logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure logging with production optimization
+def configure_logging():
+    """Configure logging based on environment"""
+    if settings.ENVIRONMENT == "production":
+        # Production: Minimal logging, errors and warnings only
+        level = logging.WARNING
+        format_str = '%(asctime)s - %(levelname)s - %(message)s'
+        # Disable debug logging for specific modules
+        logging.getLogger('app.services.karma_service').setLevel(logging.WARNING)
+        logging.getLogger('app.middleware.stp_middleware').setLevel(logging.WARNING)
+        logging.getLogger('app.ml.weighted_scoring').setLevel(logging.WARNING)
+    elif settings.ENVIRONMENT == "staging":
+        # Staging: Info level with reduced verbosity
+        level = logging.INFO
+        format_str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    else:
+        # Development: Full debug logging
+        level = logging.DEBUG if settings.DEBUG else logging.INFO
+        format_str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    logging.basicConfig(
+        level=level,
+        format=format_str,
+        force=True  # Override existing configuration
+    )
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +97,7 @@ app.add_middleware(
 app.add_middleware(MigrationMiddleware)
 
 # Include routers
+app.include_router(health.router)  # Health check endpoints
 app.include_router(auth.router)
 app.include_router(migration.router)  # Migration management
 app.include_router(routing.router)  # Legacy routing (will be deprecated)
@@ -81,6 +106,8 @@ app.include_router(routing_v2.router)  # API v2 - Enhanced with migration featur
 app.include_router(agents.router)
 app.include_router(analytics.router)
 app.include_router(websocket.router)
+app.include_router(telemetry_router)  # Telemetry bus for real-time streaming
+app.include_router(feedback_router)  # STP feedback endpoint
 app.include_router(admin.router)  # Admin endpoints for logging and monitoring
 app.include_router(dashboard_routes.router)
 
@@ -295,14 +322,16 @@ async def get_routing_statistics(
 
 @app.get("/api/stp/metrics")
 async def get_stp_metrics():
-    """Get STP middleware metrics"""
+    """Get STP middleware metrics with failure analysis"""
     from app.services.stp_service import get_stp_service
     
     stp_service = get_stp_service()
     metrics = stp_service.get_stp_metrics()
+    failure_status = stp_service.check_failure_rates()
     
     return {
         "stp_metrics": metrics,
+        "failure_analysis": failure_status,
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -331,6 +360,22 @@ async def unwrap_stp_packet(
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+
+@app.get("/api/stp/health")
+async def get_stp_health():
+    """Get STP service health status"""
+    from app.services.stp_service import get_stp_service
+    
+    stp_service = get_stp_service()
+    failure_status = stp_service.check_failure_rates()
+    
+    return {
+        "status": failure_status["status"],
+        "failure_rate": failure_status["failure_rate"],
+        "alerts": failure_status["alerts"],
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
 @app.get("/api/karma/metrics")

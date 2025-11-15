@@ -15,7 +15,6 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 import yaml
 import os
-from app.services.karma_service import KarmaServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +69,19 @@ class WeightedScoringEngine:
     
     def __init__(
         self, 
-        config_path: str = "app/config/scoring_config.yaml",
-        karma_service: Optional[KarmaServiceClient] = None
+        config_path: str = None,
+        karma_service: Optional['KarmaServiceClient'] = None
     ):
         """
         Initialize scoring engine with optional Karma service.
         
         Args:
-            config_path: Path to scoring configuration YAML
+            config_path: Path to scoring configuration YAML (auto-detected if None)
             karma_service: Optional Karma service client
         """
+        if config_path is None:
+            config_path = self._find_config_path()
+        
         self.config = self._load_config(config_path)
         self.weights = self.config.get("scoring_weights", {})
         self.karma_service = karma_service
@@ -266,7 +268,7 @@ class WeightedScoringEngine:
     
     def _normalize_score(self, score: float, min_conf: float = None) -> float:
         """
-        Normalize score to valid range.
+        Robust normalization with boundary handling for edge cases.
         
         Args:
             score: Raw score value
@@ -280,16 +282,88 @@ class WeightedScoringEngine:
         
         max_conf = self.config.get("normalization", {}).get("max_confidence", 1.0)
         
-        # Clamp to configured range
+        # Handle edge cases
+        if score != score:  # NaN check
+            logger.warning("NaN score detected, using minimum confidence")
+            return min_conf
+        
+        if score == float('inf'):
+            logger.warning("Infinite score detected, using maximum confidence")
+            return max_conf
+        
+        if score == float('-inf'):
+            logger.warning("Negative infinite score detected, using minimum confidence")
+            return min_conf
+        
+        # Log if score is significantly out of expected range
+        if score > 2.0 or score < -1.0:
+            logger.warning(
+                f"Score significantly out of expected range [0-1]: {score:.3f}. "
+                f"This may indicate a configuration issue."
+            )
+        
+        # Apply sigmoid normalization for extreme values to prevent hard clipping
+        if abs(score) > 1.5:
+            import math
+            # Sigmoid function: 1 / (1 + e^(-x))
+            normalized = 1.0 / (1.0 + math.exp(-score))
+            logger.debug(f"Applied sigmoid normalization: {score:.3f} -> {normalized:.3f}")
+            score = normalized
+        
+        # Standard clamp to configured range
         clamped = self._clamp(score, 0.0, max_conf)
         
-        # Apply minimum confidence floor
+        # Apply minimum confidence floor with validation
+        if min_conf > max_conf:
+            logger.error(
+                f"Invalid config: min_confidence ({min_conf}) > max_confidence ({max_conf}). "
+                f"Using defaults."
+            )
+            min_conf = 0.1
+            max_conf = 1.0
+        
         floored = max(clamped, min_conf) if min_conf > 0 else clamped
         
-        return self._clamp(floored, 0.0, max_conf)
+        # Final validation
+        result = self._clamp(floored, 0.0, max_conf)
+        
+        # Log normalization details for debugging
+        if abs(result - score) > 0.1:
+            logger.debug(
+                f"Score normalization: {score:.3f} -> {result:.3f} "
+                f"(range: [{min_conf:.1f}, {max_conf:.1f}])"
+            )
+        
+        return result
+    
+    def _find_config_path(self) -> str:
+        """Find configuration file in multiple possible locations"""
+        # Check environment variable first
+        env_path = os.getenv("SCORING_CONFIG_PATH")
+        if env_path and os.path.exists(env_path):
+            return env_path
+            
+        possible_paths = [
+            "app/config/scoring_config.yaml",
+            "config/scoring_config.yaml", 
+            "scoring_config.yaml",
+            os.path.join(os.path.dirname(__file__), "..", "config", "scoring_config.yaml"),
+            os.path.join(os.getcwd(), "app", "config", "scoring_config.yaml")
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        
+        logger.warning("No configuration file found in standard locations. Using defaults.")
+        return None
     
     def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from YAML file"""
+        """Load configuration from YAML file with fallback to defaults"""
+        if config_path is None:
+            logger.info("No config path provided, using default configuration")
+            return self._default_config()
+            
         try:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f) or {}
@@ -300,6 +374,9 @@ class WeightedScoringEngine:
             return self._default_config()
         except yaml.YAMLError as e:
             logger.error(f"Error parsing YAML config: {e}. Using defaults.")
+            return self._default_config()
+        except Exception as e:
+            logger.error(f"Unexpected error loading config: {e}. Using defaults.")
             return self._default_config()
     
     @staticmethod
@@ -350,7 +427,7 @@ class WeightedScoringEngine:
 _scoring_engine: Optional[WeightedScoringEngine] = None
 
 
-def get_scoring_engine(karma_service: Optional[KarmaServiceClient] = None) -> WeightedScoringEngine:
+def get_scoring_engine(karma_service: Optional['KarmaServiceClient'] = None) -> WeightedScoringEngine:
     """Get or create scoring engine instance with optional Karma service"""
     global _scoring_engine
     if _scoring_engine is None:
@@ -360,7 +437,13 @@ def get_scoring_engine(karma_service: Optional[KarmaServiceClient] = None) -> We
                 from app.services.karma_service import get_karma_service
                 karma_service = get_karma_service()
             except ImportError:
+                logger.debug("Karma service not available, continuing without it")
                 karma_service = None
         
-        _scoring_engine = WeightedScoringEngine(karma_service=karma_service)
+        try:
+            _scoring_engine = WeightedScoringEngine(karma_service=karma_service)
+        except Exception as e:
+            logger.error(f"Failed to initialize scoring engine: {e}")
+            # Create with minimal config as fallback
+            _scoring_engine = WeightedScoringEngine(config_path=None, karma_service=None)
     return _scoring_engine

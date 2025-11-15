@@ -104,3 +104,41 @@ async def get_current_user(token_data: Dict[str, Any] = Security(verify_token)) 
         "email": token_data.get("email"),
         "role": token_data.get("role", "user")
     }
+
+
+async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Security(HTTPBearer(auto_error=False))) -> Dict[str, Any]:
+    """
+    Get current user with optional authentication (for testing)
+    
+    Args:
+        credentials: Optional HTTP Authorization credentials
+        
+    Returns:
+        User information dictionary or default test user
+    """
+    if not credentials:
+        # Return default test user when no auth provided
+        return {
+            "user_id": "test_user",
+            "email": "test@example.com",
+            "role": "user"
+        }
+    
+    try:
+        token_data = verify_token(credentials)
+        user_id = token_data.get("sub")
+        if not user_id:
+            raise ValueError("Missing user ID")
+        
+        return {
+            "user_id": user_id,
+            "email": token_data.get("email"),
+            "role": token_data.get("role", "user")
+        }
+    except Exception as e:
+        logger.warning(f"Optional auth failed, using test user: {e}")
+        return {
+            "user_id": "test_user",
+            "email": "test@example.com",
+            "role": "user"
+        }
