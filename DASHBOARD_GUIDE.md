@@ -138,7 +138,7 @@ Dashboard/
 └── RecentRoutings      # Live activity feed
 ```
 
-## 🎨 **Color Scheme & Design System**
+## **Color Scheme & Design System**
 
 ### **Primary Colors**
 - **Warm Orange:** `#ff6b35` - Primary actions, highlights
