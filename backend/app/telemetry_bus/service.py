@@ -4,6 +4,7 @@ Telemetry Bus Service
 
 Core service for managing telemetry packet queue and broadcasting.
 Implements bounded queue with backpressure and overflow handling.
+Now includes optional packet signing for secure telemetry.
 """
 
 import asyncio
@@ -30,12 +31,14 @@ class TelemetryBusService:
     - WebSocket connection management
     - Broadcasting to multiple clients
     - Health metrics tracking
+    - Optional packet signing for security
     """
     
     def __init__(
         self,
         max_queue_size: int = 1000,
-        max_connections: int = 100
+        max_connections: int = 100,
+        enable_packet_signing: bool = False
     ):
         """
         Initialize telemetry bus service.
@@ -43,9 +46,11 @@ class TelemetryBusService:
         Args:
             max_queue_size: Maximum packets in queue before dropping
             max_connections: Maximum concurrent WebSocket connections
+            enable_packet_signing: Enable packet signing for security
         """
         self.max_queue_size = max_queue_size
         self.max_connections = max_connections
+        self.enable_packet_signing = enable_packet_signing
         
         # Packet queue (bounded)
         self._packet_queue: deque = deque(maxlen=max_queue_size)
@@ -58,6 +63,8 @@ class TelemetryBusService:
             "messages_sent": 0,
             "messages_dropped": 0,
             "total_connections": 0,
+            "packets_signed": 0,
+            "signing_errors": 0,
         }
         
         # Start time for uptime calculation
@@ -66,46 +73,97 @@ class TelemetryBusService:
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
         
+        # Initialize telemetry signer if enabled
+        self._telemetry_signer = None
+        if self.enable_packet_signing:
+            try:
+                from app.telemetry_bus.telemetry_security import get_telemetry_signer
+                self._telemetry_signer = get_telemetry_signer()
+                logger.info("Telemetry packet signing enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize telemetry signer: {e}")
+                self.enable_packet_signing = False
+        
         logger.info(
             f"TelemetryBusService initialized "
-            f"(max_queue={max_queue_size}, max_conn={max_connections})"
+            f"(max_queue={max_queue_size}, max_conn={max_connections}, "
+            f"signing={self.enable_packet_signing})"
         )
     
-    async def emit_packet(self, packet: TelemetryPacket):
+    async def emit_packet(self, packet: TelemetryPacket, agent_fingerprint: Optional[str] = None):
         """
         Emit telemetry packet to queue and broadcast to clients.
         
         Args:
             packet: Telemetry packet to emit
+            agent_fingerprint: Optional agent identifier for signing
         """
         async with self._lock:
+            # PHASE 3.1: Sign packet before emission
+            try:
+                if (getattr(settings, 'ENABLE_TELEMETRY_SIGNING', False) or 
+                    getattr(settings, 'TELEMETRY_PACKET_SIGNING', False)):
+                    from app.telemetry_bus.telemetry_security import get_telemetry_signer
+                    signer = get_telemetry_signer()
+                    
+                    # Convert to dict
+                    packet_dict = packet.model_dump()
+                    
+                    # Extract agent fingerprint if not provided
+                    if not agent_fingerprint:
+                        agent_fingerprint = packet_dict.get("decision", {}).get(
+                            "selected_agent",
+                            "unknown"
+                        )
+                    
+                    # Sign packet
+                    signed_packet_dict = signer.sign_packet(
+                        packet=packet_dict,
+                        agent_fingerprint=agent_fingerprint
+                    )
+                    
+                    # Use signed packet for emission
+                    packet_to_emit = signed_packet_dict
+                    
+                    logger.debug(
+                        f"Packet signed: {signed_packet_dict['security']['nonce'][:8]}..."
+                    )
+                else:
+                    packet_to_emit = packet.model_dump()
+            
+            except Exception as e:
+                logger.error(f"Error signing packet: {str(e)}")
+                # Fallback: emit unsigned packet
+                packet_to_emit = packet.model_dump()
+            
             # Check if queue is full
             if len(self._packet_queue) >= self.max_queue_size:
                 # Drop oldest packet (backpressure)
                 dropped = self._packet_queue.popleft()
                 self.metrics["messages_dropped"] += 1
                 logger.warning(
-                    f"Queue full, dropped packet: {dropped.request_id}"
+                    f"Queue full, dropped packet: {dropped.get('request_id', 'unknown')}"
                 )
             
-            # Add packet to queue
-            self._packet_queue.append(packet)
+            # Add packet to queue (as dict now, not TelemetryPacket)
+            self._packet_queue.append(packet_to_emit)
             
             # Broadcast to all connected clients
-            await self._broadcast_packet(packet)
+            await self._broadcast_packet_dict(packet_to_emit)
     
-    async def _broadcast_packet(self, packet: TelemetryPacket):
+    async def _broadcast_packet_dict(self, packet_dict: dict):
         """
-        Broadcast packet to all connected WebSocket clients.
+        Broadcast packet dictionary to all connected WebSocket clients.
         
         Args:
-            packet: Packet to broadcast
+            packet_dict: Packet dictionary (potentially signed)
         """
         if not self._active_connections:
             return
         
-        # Convert packet to JSON
-        packet_json = packet.model_dump_json()
+        # Convert to JSON
+        import json
+        packet_json = json.dumps(packet_dict)
         
         # Send to all clients (remove failed connections)
         disconnected = set()
@@ -120,6 +178,18 @@ class TelemetryBusService:
         
         # Remove disconnected clients
         self._active_connections -= disconnected
+    
+    async def _broadcast_packet(self, packet: TelemetryPacket, agent_fingerprint: Optional[str] = None):
+        """
+        Legacy broadcast method for backward compatibility.
+        
+        Args:
+            packet: Packet to broadcast
+            agent_fingerprint: Optional agent identifier for signing
+        """
+        # Convert to dict and use new method
+        packet_dict = packet.model_dump()
+        await self._broadcast_packet_dict(packet_dict)
     
     async def register_connection(self, websocket: WebSocket) -> bool:
         """
@@ -188,7 +258,14 @@ class TelemetryBusService:
         """
         async with self._lock:
             recent = list(self._packet_queue)[-limit:]
-            return [p.model_dump() for p in recent]
+            # Handle both TelemetryPacket objects and dicts
+            result = []
+            for p in recent:
+                if isinstance(p, dict):
+                    result.append(p)
+                else:
+                    result.append(p.model_dump())
+            return result
     
     # Legacy compatibility methods
     async def connect(self, websocket: WebSocket):
@@ -202,8 +279,8 @@ class TelemetryBusService:
         """Legacy method for backward compatibility"""
         asyncio.create_task(self.unregister_connection(websocket))
     
-    async def broadcast_decision(self, decision_data: dict):
-        """Legacy broadcast method for backward compatibility"""
+    async def broadcast_decision(self, decision_data: dict, agent_fingerprint: Optional[str] = None):
+        """Legacy broadcast method for backward compatibility with optional signing"""
         try:
             # Create enhanced telemetry packet
             decision_payload = DecisionPayload(
@@ -226,7 +303,11 @@ class TelemetryBusService:
                 trace=trace_payload
             )
             
-            await self.emit_packet(packet)
+            # Use agent fingerprint from decision data if not provided
+            if not agent_fingerprint:
+                agent_fingerprint = decision_data.get("agent_id", "unknown")
+            
+            await self.emit_packet(packet, agent_fingerprint)
             
         except Exception as e:
             logger.error(f"Legacy broadcast error: {e}")
@@ -255,9 +336,13 @@ def get_telemetry_service() -> TelemetryBusService:
     global _telemetry_service
     
     if _telemetry_service is None:
+        # Check if packet signing should be enabled
+        enable_signing = getattr(settings, 'TELEMETRY_PACKET_SIGNING', False)
+        
         _telemetry_service = TelemetryBusService(
             max_queue_size=getattr(settings, 'TELEMETRY_BUFFER_SIZE', 1000),
-            max_connections=100
+            max_connections=100,
+            enable_packet_signing=enable_signing
         )
     
     return _telemetry_service

@@ -8,7 +8,7 @@ from typing import Dict
 
 from app.core.config import settings
 from app.core.database import init_database
-from app.routers import routing, agents, analytics, websocket, auth, migration, health
+from app.routers import routing, agents, analytics, websocket, auth, migration, health, telemetry_security
 from app.telemetry_bus import telemetry_router
 from app.api.v1 import routing as routing_v1
 from app.api.v2 import routing as routing_v2
@@ -107,6 +107,7 @@ app.include_router(agents.router)
 app.include_router(analytics.router)
 app.include_router(websocket.router)
 app.include_router(telemetry_router)  # Telemetry bus for real-time streaming
+app.include_router(telemetry_security.router)  # Telemetry security endpoints
 app.include_router(feedback_router)  # STP feedback endpoint
 app.include_router(admin.router)  # Admin endpoints for logging and monitoring
 app.include_router(dashboard_routes.router)

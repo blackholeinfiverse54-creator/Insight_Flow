@@ -143,7 +143,7 @@ class DecisionEngine:
             reasoning=reason
         )
         
-        # Broadcast to telemetry bus
+        # Broadcast to telemetry bus with agent fingerprinting
         from app.telemetry_bus.service import get_telemetry_service
         telemetry_service = get_telemetry_service()
         await telemetry_service.broadcast_decision({
@@ -153,7 +153,7 @@ class DecisionEngine:
             "execution_time_ms": 0.0,  # Will be calculated in actual implementation
             "context": context,
             "request_id": request_id
-        })
+        }, agent_fingerprint=agent_id)  # Use agent_id as fingerprint
         
         # Create routing decision response
         routing_decision = {

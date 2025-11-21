@@ -65,17 +65,19 @@ class QLearningUpdater:
         action: str,
         reward: float,
         next_state: Optional[str] = None,
-        request_id: Optional[str] = None
+        request_id: Optional[str] = None,
+        karma_score: Optional[float] = None  # ADD this parameter
     ) -> Tuple[float, float]:
         """
-        Perform Q-learning update.
+        Perform Q-learning update with karma-weighted smoothing.
         
         Args:
             state: Current state identifier
             action: Action taken (agent selected)
-            reward: Reward signal (-1 to 1)
+            reward: Base reward signal (-1 to 1)
             next_state: Optional next state
             request_id: Request identifier for logging
+            karma_score: Optional karma score for smoothing (-1 to 1)
         
         Returns:
             Tuple of (old_confidence, new_confidence)
@@ -85,6 +87,27 @@ class QLearningUpdater:
             return (0.0, 0.0)
         
         try:
+            # PHASE 3.1: Apply karma-weighted reward smoothing
+            if self.enable_karma_weighting and karma_score is not None:
+                # Normalize karma score to [0, 1] range
+                karma_normalized = (karma_score + 1.0) / 2.0
+                
+                # Weighted smoothing formula:
+                # adjusted_reward = 0.75 * q_reward + 0.25 * karma_normalized
+                adjusted_reward = (0.75 * reward) + (0.25 * karma_normalized)
+                
+                # Clamp to valid range [-1, 1]
+                adjusted_reward = max(-1.0, min(1.0, adjusted_reward))
+                
+                logger.debug(
+                    f"Reward smoothing: base={reward:.2f}, "
+                    f"karma={karma_score:.2f}, "
+                    f"adjusted={adjusted_reward:.2f}"
+                )
+                
+                # Use adjusted reward for Q-update
+                reward = adjusted_reward
+            
             # Get current Q-value
             state_action = (state, action)
             old_q_value = self.q_table.get(state_action, 0.5)  # Default 0.5

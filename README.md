@@ -1,15 +1,18 @@
 # InsightFlow - Adaptive Decision Intelligence Engine
 
-InsightFlow is a cross-platform, self-learning intelligence layer that routes tasks and responses to the most suitable AI agent, continuously improving through analytics, feedback, and context signals. Now enhanced with **Sovereign Core Integration** for enterprise-grade security and behavioral intelligence.
+**Version 3.1 (Production Hardened) - Sovereign-Grade Ready** ✅
+
+InsightFlow is a cross-platform, self-learning intelligence layer that routes tasks and responses to the most suitable AI agent, continuously improving through analytics, feedback, and context signals. Now enhanced with **Phase 3.1 Hardening** featuring signed telemetry, karma-weighted Q-learning, and SSPL Phase III compliance.
 
 ## 🚀 Core Features
 
 ### 🧠 **Intelligent Routing System**
 - **Q-learning Based Routing**: Adaptive routing with multiple strategies
-- **Behavioral Scoring**: Karma-weighted decisions based on user behavior patterns
+- **Karma-Weighted Learning**: Behavioral scoring with reward smoothing (Phase 3.1)
 - **Weighted Scoring Engine**: Multi-factor confidence calculation
 - **Alternative Agent Suggestions**: Fallback options with confidence scores
 - **Context-Aware Decisions**: Priority-based and domain-specific routing
+- **Real-Time Policy Updates**: Closed-loop learning with instant adaptation
 
 ### 🔐 **Sovereign Core Integration (Phase 2.2)**
 - **STP Middleware**: Structured Token Protocol for secure packet transmission
@@ -29,6 +32,8 @@ InsightFlow is a cross-platform, self-learning intelligence layer that routes ta
 - **Real-time Analytics**: Live performance monitoring and metrics
 - **Karma Metrics**: Behavioral scoring analytics and trends
 - **STP Metrics**: Packet transmission statistics
+- **Telemetry Security**: HMAC-SHA256 packet signing with nonce protection (Phase 3.1)
+- **Policy Update Telemetry**: Real-time learning adaptation tracking (Phase 3.1)
 - **Admin Dashboard**: Comprehensive control panel
 - **Performance Tracking**: Feedback loop and learning system
 
@@ -151,6 +156,16 @@ SOVEREIGN_DB_PORT=5432
 SOVEREIGN_DB_NAME=insightflow_sovereign
 SOVEREIGN_DB_USER=insightflow_user
 SOVEREIGN_DB_PASSWORD=your_db_password_here
+
+# =============================================================================
+# Telemetry Security Configuration (Phase 3.1)
+# =============================================================================
+
+# Enable packet signing
+ENABLE_TELEMETRY_SIGNING=true
+
+# Maximum timestamp drift (seconds)
+TELEMETRY_MAX_TIMESTAMP_DRIFT=5
 ```
 
 ### 3. Set Up Database
@@ -398,6 +413,41 @@ curl -X POST "http://localhost:8000/api/stp/unwrap" \
   }'
 ```
 
+### Telemetry Security Operations
+
+```bash
+# Get telemetry security status
+curl -X GET "http://localhost:8000/api/telemetry/security/status" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Verify signed telemetry packet
+curl -X POST "http://localhost:8000/api/telemetry/security/verify" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "signed_packet": {
+      "request_id": "test-123",
+      "security": {
+        "nonce": "abc123...",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "packet_signature": "def456..."
+      }
+    }
+  }'
+
+# Get telemetry security metrics
+curl -X GET "http://localhost:8000/api/telemetry/security/metrics" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Toggle packet signing (admin only)
+curl -X POST "http://localhost:8000/api/telemetry/security/toggle?enabled=true" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Clear nonce cache (admin only)
+curl -X DELETE "http://localhost:8000/api/telemetry/security/nonce-cache" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
 ### Submit Feedback with Karma Impact
 
 ```bash
@@ -453,6 +503,13 @@ pytest tests/services/test_karma_service.py -v
 
 # Run STP middleware tests
 pytest tests/middleware/test_stp_middleware.py -v
+
+# Run telemetry security tests (Phase 3.1)
+pytest tests/test_telemetry_security.py -v
+pytest tests/telemetry_security/ -v
+
+# Run telemetry security integration test
+python test_telemetry_security_integration.py
 ```
 
 ### Frontend Tests
@@ -644,9 +701,17 @@ docker-compose up --build
 - **Deployment Time**: ~12 minutes
 - **Migration**: Automated tracking and conversion tools
 
-## 🌟 Latest Updates (Phase 2.2)
+## 🌟 Latest Updates (Phase 3.1 - Production Hardened)
 
-### ✨ **New in v2.2:**
+### ✨ **New in v3.1 (Phase 3.1 Hardening):**
+- **Signed Telemetry**: HMAC-SHA256 packet signing with nonce-based replay protection
+- **Karma-Weighted Q-Learning**: Adaptive reward smoothing (75% reward + 25% karma)
+- **Real-Time Policy Updates**: Closed-loop learning with instant adaptation telemetry
+- **SSPL Phase III Compliance**: Complete security test coverage and validation
+- **Timestamp Drift Protection**: 5-second tolerance with cryptographic verification
+- **Agent Fingerprinting**: Per-agent security tracking and validation
+
+### ✨ **Previous Updates (Phase 2.2):**
 - **Sovereign Core Integration**: Enterprise-grade security and database
 - **Karma Behavioral Scoring**: AI-driven user behavior analysis
 - **STP Middleware**: Secure token protocol for packet transmission
@@ -654,12 +719,13 @@ docker-compose up --build
 - **Comprehensive Testing**: Full endpoint and integration test coverage
 - **Migration Support**: Seamless transition tools and guides
 
-### 🔮 **Coming Soon:**
-- **Advanced Analytics Dashboard**: Real-time behavioral insights
-- **Multi-tenant Support**: Organization-level isolation
-- **Advanced Security**: OAuth2, RBAC, and audit logging
-- **Performance Optimization**: Caching layers and load balancing
-- **Mobile SDK**: Native mobile app integration
+### 🔮 **Coming Soon (Phase 4.0):**
+- **Advanced Analytics Dashboard**: Real-time behavioral insights with ML optimization
+- **Multi-tenant Support**: Organization-level isolation and resource management
+- **Enhanced Security**: OAuth2, RBAC, and comprehensive audit logging
+- **Performance Optimization**: Redis caching, CDN integration, and load balancing
+- **Mobile SDK**: Native mobile app integration with offline support
+- **Distributed Tracing**: OpenTelemetry integration for microservices monitoring
 
 ---
 

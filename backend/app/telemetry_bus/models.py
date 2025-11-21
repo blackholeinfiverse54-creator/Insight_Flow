@@ -85,6 +85,54 @@ class TelemetryPacket(BaseModel):
         }
 
 
+class PolicyUpdatePayload(BaseModel):
+    """
+    Policy update information for closed-loop learning.
+    
+    Emitted after each feedback event to show real-time adaptation.
+    """
+    previous_confidence: float = Field(..., ge=0.0, le=1.0)
+    new_confidence: float = Field(..., ge=0.0, le=1.0)
+    delta_q_value: float = Field(..., description="Change in Q-value")
+    karma_delta: Optional[float] = Field(None, description="Karma contribution")
+    routing_strategy_change: Optional[str] = Field(
+        None,
+        description="Strategy change if any"
+    )
+
+
+class PolicyUpdatePacket(BaseModel):
+    """
+    Policy update telemetry packet.
+    
+    Sent after feedback to show routing adaptation.
+    """
+    request_id: str = Field(..., description="Original request ID")
+    agent_id: str = Field(..., description="Agent that was updated")
+    policy_update: PolicyUpdatePayload
+    trace: TracePayload
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "r-9f1a",
+                "agent_id": "nlp-001",
+                "policy_update": {
+                    "previous_confidence": 0.87,
+                    "new_confidence": 0.91,
+                    "delta_q_value": 0.04,
+                    "karma_delta": 0.02,
+                    "routing_strategy_change": None
+                },
+                "trace": {
+                    "version": "v3.1",
+                    "node": "insightflow-router",
+                    "ts": "2025-11-21T11:30:00Z"
+                }
+            }
+        }
+
+
 class HealthResponse(BaseModel):
     """Telemetry health check response"""
     status: str = Field(default="ok")

@@ -184,6 +184,22 @@ class Settings(BaseSettings):
     TELEMETRY_AUTH_REQUIRED: bool = safe_bool(os.getenv("TELEMETRY_AUTH_REQUIRED", "false"), False)
     
     # ========================================================================
+    # Telemetry Security Configuration (Phase 3.1)
+    # ========================================================================
+    
+    # Enable telemetry packet signing
+    ENABLE_TELEMETRY_SIGNING: bool = safe_bool(os.getenv("ENABLE_TELEMETRY_SIGNING", "true"), True)
+    
+    # Telemetry packet signing (alias for backward compatibility)
+    TELEMETRY_PACKET_SIGNING: bool = safe_bool(os.getenv("TELEMETRY_PACKET_SIGNING", "false"), False)
+    
+    # Maximum timestamp drift for verification (seconds)
+    TELEMETRY_MAX_TIMESTAMP_DRIFT: int = safe_int(os.getenv("TELEMETRY_MAX_TIMESTAMP_DRIFT", "5"), 5)
+    
+    # Telemetry signature verification timeout (alias)
+    TELEMETRY_SIGNATURE_TIMEOUT: int = safe_int(os.getenv("TELEMETRY_SIGNATURE_TIMEOUT", "5"), 5)
+    
+    # ========================================================================
     # STP Feedback Configuration (V3 Phase C)
     # ========================================================================
     
@@ -271,6 +287,18 @@ class Settings(BaseSettings):
             raise ValueError('SOVEREIGN_JWT_SECRET cannot use placeholder value in production')
         if len(v) < 32:
             raise ValueError('SOVEREIGN_JWT_SECRET must be at least 32 characters long for security')
+        return v
+    
+    @validator('TELEMETRY_SIGNATURE_TIMEOUT')
+    def validate_telemetry_signature_timeout(cls, v):
+        if not 1 <= v <= 30:
+            raise ValueError('Telemetry signature timeout must be between 1 and 30 seconds')
+        return v
+    
+    @validator('TELEMETRY_MAX_TIMESTAMP_DRIFT')
+    def validate_telemetry_max_timestamp_drift(cls, v):
+        if not 1 <= v <= 60:
+            raise ValueError('Telemetry max timestamp drift must be between 1 and 60 seconds')
         return v
     
     @validator('JWT_SECRET_KEY')
